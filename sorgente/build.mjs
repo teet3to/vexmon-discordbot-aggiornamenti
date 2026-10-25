@@ -1,0 +1,11 @@
+import { readFile, writeFile } from 'node:fs/promises';
+const root = new URL('./', import.meta.url);
+const vendor = await readFile(new URL('vendor.mjs', root), 'utf8');
+const application = await readFile(new URL('app.mjs', root), 'utf8');
+const marker = '// VEXMON_RUNTIME_EXPORTS\n';
+const [dependencies, tail] = vendor.split(marker);
+if (!tail || !application.includes('// VEXMON_APPLICATION_BODY\n')) throw new Error('Struttura dei sorgenti non valida.');
+const license = tail.slice(tail.indexOf('/*! Bundled license information:'));
+const body = application.split('// VEXMON_APPLICATION_BODY\n')[1];
+await writeFile(new URL('bot.mjs', root), dependencies + '\n' + body + '\n' + license, 'utf8');
+console.log('Creato bot.mjs nella cartella sorgente.');

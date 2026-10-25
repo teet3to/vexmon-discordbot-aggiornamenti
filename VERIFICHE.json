@@ -1,0 +1,38 @@
+{
+  "version": "1.2.0",
+  "tests": {
+    "passed": 34,
+    "failed": 0,
+    "discord": "simulato; nessun login reale"
+  },
+  "smoke": [
+    "bundle diretto",
+    "start.mjs sorgenti",
+    "import bundle da start esistente"
+  ],
+  "healthz": 200,
+  "readyz_without_discord": 503,
+  "preserved": [
+    "cancellazione cronologia pannello/regole",
+    "CSS trascrizioni"
+  ],
+  "pending": [],
+  "sha256_bot": "796e5c96d032dbed4271eaa13069d7e4073914366dc4c66cd58e757ed5108c09",
+  "reset_password": [
+    "Ultimo accesso al server",
+    "Disponibilità di screenshot delle sessioni di gioco",
+    "Risposte verificate nel ticket e nella trascrizione HTML"
+  ],
+  "search": [
+    "utente Discord, ID ticket, nickname MC, nome Discord",
+    "tutto lo staff ticket; risultati limitati ai canali visualizzabili",
+    "paginazione con verifica permessi e autore"
+  ],
+  "rules": [
+    "servermute per mute",
+    "voicechat per voce",
+    "domanda per crate",
+    "cancellazione integrale testata per entrambi i regolamenti",
+    "testi e footer aggiornati; sanzioni invariate"
+  ]
+}
