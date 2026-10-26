@@ -1,38 +1,28 @@
 {
-  "version": "1.2.0",
+  "version": "2.0.0",
+  "based_on": "bot (10).mjs",
   "tests": {
-    "passed": 34,
+    "passed": 24,
     "failed": 0,
+    "sqlite": "reale",
     "discord": "simulato; nessun login reale"
   },
-  "smoke": [
-    "bundle diretto",
-    "start.mjs sorgenti",
-    "import bundle da start esistente"
+  "smoke": {
+    "healthz": 200,
+    "readyz_without_discord": 503,
+    "integrity_check": "ok"
+  },
+  "database": "data/tickets.sqlite",
+  "html_in_database": false,
+  "migration_tags": [
+    "native",
+    "legacy_json",
+    "legacy_log"
   ],
-  "healthz": 200,
-  "readyz_without_discord": 503,
   "preserved": [
-    "cancellazione cronologia pannello/regole",
-    "CSS trascrizioni"
+    "politica autorizzazioni punto 2 audit",
+    "grafica e regole del bot definitivo",
+    "amministratore permanente"
   ],
-  "pending": [],
-  "sha256_bot": "796e5c96d032dbed4271eaa13069d7e4073914366dc4c66cd58e757ed5108c09",
-  "reset_password": [
-    "Ultimo accesso al server",
-    "Disponibilità di screenshot delle sessioni di gioco",
-    "Risposte verificate nel ticket e nella trascrizione HTML"
-  ],
-  "search": [
-    "utente Discord, ID ticket, nickname MC, nome Discord",
-    "tutto lo staff ticket; risultati limitati ai canali visualizzabili",
-    "paginazione con verifica permessi e autore"
-  ],
-  "rules": [
-    "servermute per mute",
-    "voicechat per voce",
-    "domanda per crate",
-    "cancellazione integrale testata per entrambi i regolamenti",
-    "testi e footer aggiornati; sanzioni invariate"
-  ]
+  "sha256_bot": "e786a2ce7804187ddf15c41cac6381362ca0acdc4709d22ccba7624c0384caa5"
 }

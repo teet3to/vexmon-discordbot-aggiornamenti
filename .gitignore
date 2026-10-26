@@ -5,3 +5,7 @@ data/
 node_modules/
 *.tmp
 sorgente/bot.mjs
+
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm

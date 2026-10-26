@@ -29,13 +29,18 @@ const channels = new Collection();
 guild.channels = { cache: channels, async fetch(id) { return id ? channels.get(id) ?? null : channels; }, async create(options) { const channel = fakeChannel(options); channels.set(channel.id, channel); return channel; } };
 bot.client.user = { id: botId, bot: true };
 bot.client.guilds.cache.set(guildId, guild);
+guild.emojis = { cache: new Collection(), async fetch() { return this.cache; } };
 bot.client.application = { emojis: { cache: new Collection(), async fetch() { return this.cache; } } };
 
 function fakeChannel(options = {}) {
   const messages = new Collection();
   const channel = {
     id: nextId(), guild, name: options.name ?? 'test', type: options.type ?? C.GuildText, topic: options.topic ?? '', createdTimestamp: Date.now(), sent: [], deleted: false, lastMessageId: undefined,
-    permissionOverwrites: { cache: new Collection((options.permissionOverwrites ?? []).map(item => [item.id, { ...item, type: item.type ?? (item.id === guildId || [oldRole.id, newRole.id, adminRole.id].includes(item.id) ? 0 : 1), allow: new PermissionsBitField(item.allow ?? 0n), deny: new PermissionsBitField(item.deny ?? 0n) }])) },
+    permissionOverwrites: { cache: new Collection((options.permissionOverwrites ?? []).map(item => [item.id, { ...item, type: item.type ?? (item.id === guildId || [oldRole.id, newRole.id, adminRole.id].includes(item.id) ? 0 : 1), allow: new PermissionsBitField(item.allow ?? 0n), deny: new PermissionsBitField(item.deny ?? 0n) }])), async edit(id, values) {
+      const old = this.cache.get(id); let allow = old?.allow.bitfield ?? 0n, deny = old?.deny.bitfield ?? 0n;
+      for (const [name, value] of Object.entries(values)) { if (value) { allow |= P[name]; deny &= ~P[name]; } else { allow &= ~P[name]; deny |= P[name]; } }
+      this.cache.set(id, { id, type: 1, allow: new PermissionsBitField(allow), deny: new PermissionsBitField(deny) });
+    } },
     permissionsFor(who) { return (who?.id ?? who) === guildId ? noPermissions : fullPermissions; },
     isTextBased() { return true; },
     async setTopic(value) { this.topic = value; return this; },
@@ -44,7 +49,7 @@ function fakeChannel(options = {}) {
     async send(payload) {
       for (const component of payload.components ?? []) component.toJSON();
       this.sent.push(payload);
-      const sent = { id: nextId(), content: '', author: { id: botId, username: 'Vexmon', bot: true, displayAvatarURL: () => 'https://cdn.discordapp.com/avatar.png' }, createdTimestamp: Date.now(), system: false, mentions: { users: new Collection() }, attachments: new Collection(), components: payload.components ?? [], embeds: [], deleted: false, async delete() { this.deleted = true; } };
+      const sent = { id: nextId(), content: '', author: { id: botId, username: 'Vexmon', bot: true, displayAvatarURL: () => 'https://cdn.discordapp.com/avatar.png' }, createdTimestamp: Date.now(), system: false, mentions: { users: new Collection() }, attachments: new Collection((payload.files ?? []).map(file => { const id = nextId(); return [id, { id, name: file.name, contentType: 'text/html', size: file.attachment.length, url: `https://cdn.discordapp.com/attachments/${this.id}/${id}/${file.name}`, testContent: file.attachment.toString('utf8') }]; })), components: payload.components ?? [], embeds: [], deleted: false, async delete() { this.deleted = true; } };
       messages.set(sent.id, sent); this.lastMessageId = sent.id;
       return sent;
     },
@@ -74,322 +79,186 @@ function addHumanMessage(channel, content = 'Ciao, il mio problema è questo.') 
   return message;
 }
 let first, second;
-after(async () => { bot.client.destroy(); await rm(dataDir, { recursive: true, force: true }); });
+after(async () => { bot.client.destroy(); (await bot.openTicketDatabase()).close(); await rm(dataDir, { recursive: true, force: true }); });
 
-test('rimuove tutte le assegnazioni amministrative personali dai dati', async () => {
-  const saved = JSON.parse(await readFile(join(dataDir, 'ticket-config.json'), 'utf8'));
-  assert.equal(saved.oldGuild.botAdminUserId, undefined);
-  const config = await bot.loadConfig('oldGuild'); assert.equal(config.botAdminUserId, undefined);
-  assert.equal(bot.commands.find(c => c.name === 'ticket-setup').options.some(o => o.name === 'utente-admin-bot'), false);
-});
-test('ID di sei caratteri: collisioni controllate e nessun riutilizzo', () => {
-  const state = { reserved: { AAAAAA: 1 } }; let calls = 0;
-  const id = bot.allocateTicketId(state, () => calls++ < 6 ? 0 : 1);
-  assert.equal(id, 'BBBBBB');
-  const seen = new Set();
-  for (let i = 0; i < 2000; i++) { const id = bot.allocateTicketId(state); assert.match(id, /^[A-Z0-9]{6}$/); assert(!seen.has(id)); seen.add(id); }
-});
-test('prenotazioni simultanee persistono senza collisioni', async () => {
-  const ids = await Promise.all(Array.from({ length: 20 }, () => bot.reserveTicketId()));
-  assert.equal(new Set(ids).size, 20);
-  const state = JSON.parse(await readFile(join(dataDir, 'ticket-registry.json'), 'utf8'));
-  assert(ids.every(id => Object.hasOwn(state.reserved, id)));
-});
-test('scritture configurazioni concorrenti non perdono gli altri server', async () => {
-  await Promise.all(['guild-a', 'guild-b', 'guild-c'].map(id => bot.saveConfig(id, { categories: {}, label: id, botAdminUserId: 'arbitrary-person' })));
-  const saved = JSON.parse(await readFile(join(dataDir, 'ticket-config.json'), 'utf8'));
-  for (const id of ['guild-a', 'guild-b', 'guild-c']) { assert.equal(saved[id].label, id); assert.equal(saved[id].botAdminUserId, undefined); }
-});
-test('file JSON corrotto viene preservato e blocca la riscrittura', async () => {
-  const path = join(dataDir, 'corrotto.json'); await writeFile(path, '{bad json');
-  await assert.rejects(bot.readJson(path), /Dati non leggibili/);
-  await assert.rejects(bot.atomicJson(path, {}), /Dati non leggibili/);
-  assert.equal(await readFile(path, 'utf8'), '{bad json');
-});
-test('lo stesso utente può aprire più ticket con nickname identico', async () => {
-  await bot.createTicket(interactionFor(), 'minecraft', 'vexmon', { minecraft_name: 'Steve123', problem: 'Test' });
-  await bot.createTicket(interactionFor(), 'minecraft', 'vexmon', { minecraft_name: 'Steve123', problem: 'Altro test' });
-  [first, second] = [...channels.values()].filter(c => c.topic.includes('opener:'));
-  assert(first && second); assert.notEqual(first.id, second.id);
-  const a = await bot.ensureTicketRegistered(first), b = await bot.ensureTicketRegistered(second);
-  assert.notEqual(a.id, b.id); assert.match(a.id, /^[A-Z0-9]{6}$/);
-  assert(JSON.stringify(first.sent[0].components.map(c => c.toJSON())).includes(a.id));
-  assert(first.name.endsWith(a.id.toLowerCase()));
-});
-test('un canale normale con prefisso ticket non viene riconosciuto', () => {
-  assert.equal(bot.ticketTypeForChannel(fakeChannel({ name: 'supporto-discord-generale' })), undefined);
-});
-test('ticket precedenti ricevono un ID stabile anche dopo rinomina e riavvio', async () => {
-  const legacy = fakeChannel({ topic: `Ticket di qualcuno | opener:${openerId} | type:account` }); channels.set(legacy.id, legacy);
-  const record = await bot.ensureTicketRegistered(legacy);
-  legacy.name = 'nome-completamente-diverso';
-  assert.equal((await bot.ensureTicketRegistered(legacy)).id, record.id);
-  const code = `const m=await import(${JSON.stringify(new URL('../app.mjs', import.meta.url).href)}); console.log((await m.loadRegistry()).tickets[${JSON.stringify(legacy.id)}].id);m.client.destroy();`;
-  const child = spawnSync(process.execPath, ['--input-type=module', '-e', code], { env: { ...process.env, DATA_DIR: dataDir }, encoding: 'utf8' });
-  assert.equal(child.status, 0, child.stderr); assert.equal(child.stdout.trim(), record.id);
-});
-test('spostamento aggiorna ruoli, categoria e metadati mantenendo partecipanti e ID', async () => {
-  const before = await bot.ensureTicketRegistered(first);
-  const participant = '100000000000000090';
-  first.permissionOverwrites.cache.set(participant, { id: participant, type: 1, allow: new PermissionsBitField(P.ViewChannel), deny: noPermissions });
-  await bot.moveTicket(first, 'discord');
-  assert.equal(first.parentId, destCategory.id);
-  assert(!first.permissionOverwrites.cache.has(oldRole.id));
-  assert(first.permissionOverwrites.cache.get(newRole.id).allow.has(P.ViewChannel));
-  assert(first.permissionOverwrites.cache.get(participant).allow.has(P.ViewChannel));
-  assert(first.permissionOverwrites.cache.get(botId).allow.has(P.ViewChannel));
-  assert(first.permissionOverwrites.cache.get(guildId).deny.has(P.ViewChannel));
-  const after = await bot.ensureTicketRegistered(first);
-  assert.equal(after.id, before.id); assert.equal(after.type, 'discord');
-  assert.equal(bot.ticketTypeForChannel(first), 'discord');
-});
-test('presa in carico esclusiva; un altro staffer non può sottrarla', async () => {
-  await bot.claimTicket(first, staffId);
-  await assert.rejects(bot.claimTicket(first, secondStaffId), /già in carico/);
-  await assert.rejects(bot.claimTicket(first, secondStaffId, true), /già in carico/);
-  await bot.claimTicket(first, secondStaffId, true, true);
-  assert.equal((await bot.ensureTicketRegistered(first)).claimedBy, undefined);
-});
-test('emoji vengono risolte dalla applicazione senza accesso alle emoji server', () => {
-  const emoji = { id: '100000000000000099', name: 'ticket', animated: false, toString: () => '<:ticket:100000000000000099>' };
-  bot.client.application.emojis.cache.set(emoji.id, emoji);
-  assert.equal(bot.customEmoji(guild, 'ticket'), emoji.toString());
-  assert.equal(bot.emojiOption(guild, 'ticket').id, emoji.id);
-  assert.equal(bot.emojiOption(guild, 'inesistente').name, '🎫');
-});
-test('trascrizione contiene ID, testo utente ed escaping HTML', async () => {
-  addHumanMessage(first, 'Richiesta <script>alert(1)</script>');
-  const record = await bot.ensureTicketRegistered(first);
-  const report = await bot.buildTicketReport(first, guild, 'discord', { id: staffId }, []);
-  assert(report.html.includes(record.id));
-  assert(report.html.includes('&lt;script&gt;alert(1)&lt;/script&gt;'));
-  assert.equal(report.record.ticketId, record.id);
-  assert.equal(report.meta.truncated, false);
-});
-test('chiusure simultanee: una sola trascrizione finale e una sola cancellazione', async () => {
-  const before = archive.sent.length;
-  const results = await Promise.allSettled([bot.closeTicket(first, { id: staffId }, { delayMs: 0 }), bot.closeTicket(first, { id: staffId }, { delayMs: 0 })]);
-  assert.equal(results.filter(r => r.status === 'fulfilled').length, 1);
-  assert.equal(archive.sent.length, before + 1); assert(first.deleted);
-  const records = await bot.getRecords(guildId); assert.equal(records.filter(r => r.channelId === first.id).length, 1);
-});
-test('errore invio trascrizione impedisce la cancellazione del ticket', async () => {
-  const send = archive.send; archive.send = async () => { throw new Error('Errore rete'); };
-  try { await assert.rejects(bot.closeTicket(second, { id: staffId }, { delayMs: 0 }), /Errore rete/); assert.equal(second.deleted, false); }
-  finally { archive.send = send; }
-  assert.equal((await bot.ensureTicketRegistered(second)).state, 'open');
-});
-test('una risposta prima della chiusura automatica annulla la cancellazione', async () => {
-  const result = await bot.closeTicket(second, { id: botId, bot: true }, { delayMs: 0, beforeDelete: async () => false });
-  assert.equal(result, false); assert.equal(second.deleted, false);
-  assert.equal((await bot.ensureTicketRegistered(second)).state, 'open');
-});
-test('conservazione: cancella solo trascrizioni scadute e create da questo bot', async () => {
-  const cfg = await bot.loadConfig(guildId); cfg.retentionDays = 1; await bot.saveConfig(guildId, cfg);
-  await bot.updateRegistry(state => { for (const item of state.archives) item.createdAt = Date.now() - 2 * 86400000; });
-  const ids = (await bot.loadRegistry()).archives.map(item => item.messageId);
-  const protectedMessage = archive.messages.cache.get(ids[0]); protectedMessage.author = { id: 'different-bot' };
-  await bot.purgeExpiredTranscripts();
-  assert.equal(protectedMessage.deleted, false);
-  assert(archive.messages.cache.get(ids[1]).deleted);
-});
-test('statistiche parallele e aggiornamento della stessa chiusura sono idempotenti', async () => {
-  await Promise.all(Array.from({ length: 10 }, (_, i) => bot.recordTicket('stats-server', { channelId: `c${i}`, closedAt: Date.now() })));
-  await bot.recordTicket('stats-server', { channelId: 'c1', closedAt: Date.now(), revised: true });
-  const rows = await bot.getRecords('stats-server'); assert.equal(rows.length, 10); assert(rows.find(r => r.channelId === 'c1').revised);
-});
 
-test('aggiornamenti concorrenti della stessa configurazione preservano campi indipendenti', async () => {
-  const a = await bot.loadConfig(guildId), b = await bot.loadConfig(guildId);
-  a.pendingTickets = { sample: { since: 1, by: staffId } }; b.inactivityHours = 48;
-  await Promise.all([bot.saveConfig(guildId, a), bot.saveConfig(guildId, b)]);
-  const config = await bot.loadConfig(guildId);
-  assert(config.pendingTickets.sample); assert.equal(config.inactivityHours, 48);
+test('crea SQLite e migra configurazione lasciando intatto il vecchio JSON', async () => {
+  const db=await bot.openTicketDatabase();
+  assert.equal(db.prepare('PRAGMA journal_mode').get().journal_mode,'wal');
+  assert.equal((await bot.loadConfig('oldGuild')).botAdminUserId,undefined);
+  assert(JSON.parse(await readFile(join(dataDir,'ticket-config.json'),'utf8')).oldGuild.botAdminUserId);
+  assert(db.prepare("SELECT value FROM settings WHERE key='ticket-config.json'").get());
 });
-test('configurazioni individuali precedenti non concedono accesso ai comandi', async () => {
-  const i = interactionFor(); i.channel = second; i.member = members.get(openerId); i.memberPermissions = noPermissions;
-  assert.equal(await bot.isBotAdmin(i), false);
-  assert.equal(await bot.canManageTicket(i, 'minecraft'), false);
+test('prenotazione concorrente di ID univoci persistenti nel DB',async()=>{
+  const ids=await Promise.all(Array.from({length:25},()=>bot.reserveTicketId()));
+  assert.equal(new Set(ids).size,25);
+  const db=await bot.openTicketDatabase();assert.equal(db.prepare('SELECT count(*) n FROM reserved_ids').get().n,25);
 });
-test('dopo lo spostamento solo il ruolo della nuova categoria può gestire il ticket', async () => {
-  const moved = [...channels.values()].find(c => c.topic.includes('type:account'));
-  await bot.moveTicket(moved, 'discord');
-  const oldStaff = interactionFor(staffId); oldStaff.channel = moved; oldStaff.member = members.get(staffId); oldStaff.memberPermissions = noPermissions;
-  const newStaff = interactionFor(secondStaffId); newStaff.channel = moved; newStaff.member = members.get(secondStaffId); newStaff.memberPermissions = noPermissions;
-  assert.equal(await bot.canManageTicket(oldStaff, 'discord'), false);
-  assert.equal(await bot.canManageTicket(newStaff, 'discord'), true);
+test('aperture multiple stesso utente salvano form, stato e identità nel DB',async()=>{
+  await bot.createTicket(interactionFor(),'minecraft','vexmon',{minecraft_name:'SqlPlayer',problem:'Prima richiesta'});
+  await bot.createTicket(interactionFor(),'minecraft','vexmon',{minecraft_name:'SqlPlayer',problem:'Seconda richiesta'});
+  [first,second]=[...channels.values()].filter(c=>c.topic.includes('player:SqlPlayer'));
+  assert(first&&second);
+  const found=bot.sqliteSearch(guildId,'sqlplayer',null,'open');assert.equal(found.length,2);
+  assert.equal(found[0].openerId,openerId);assert(found[0].answers.problem);
 });
-test('trascrizione parziale viene segnalata quando esistono più di 4000 messaggi', async () => {
-  const channel = fakeChannel({ topic: `Ticket di qualcuno | opener:${openerId} | type:minecraft` }); channels.set(channel.id, channel);
-  for (let i = 0; i < 4001; i++) addHumanMessage(channel, `Messaggio ${i}`);
-  const messages = await bot.fetchAllMessages(channel);
-  assert.equal(messages.length, 4000); assert.equal(messages.truncated, true);
-  assert(!messages.some(m => m.content === 'Messaggio 0'));
+test('SQLite ricerca per ID ticket, ID utente, menzione e nome Discord',async()=>{
+  const record=await bot.ensureTicketRegistered(first);
+  for(const query of [record.id.toLowerCase(),openerId,`<@${openerId}>`,'discorduser'])assert(bot.sqliteSearch(guildId,query,null,'open').length);
+  assert.equal(bot.sqliteSearch(guildId,'sqlplayer','utente-diverso','open').length,0);
+  assert.equal(bot.sqliteSearch('altro-server','sqlplayer',null,'open').length,0);
 });
-test('canale trascrizioni pubblico viene rifiutato prima di creare un ticket', async () => {
-  const original = archive.permissionsFor;
-  archive.permissionsFor = () => fullPermissions;
-  const count = channels.size;
-  try { await assert.rejects(bot.createTicket(interactionFor(), 'minecraft', 'vexmon', { minecraft_name: 'Steve' }), /deve essere privato/); }
-  finally { archive.permissionsFor = original; }
-  assert.equal(channels.size, count);
+test('query SQL con apostrofi e wildcard restano dati, senza SQL injection',()=>{
+  assert.equal(bot.sqliteSearch(guildId,"' OR 1=1 --",null,'open').length,0);
+  assert.equal(bot.sqliteSearch(guildId,'%',null,'open').length,0);
+  assert.equal(bot.sqliteSearch(guildId,'_',null,'open').length,0);
 });
-
-test('modulo reset password: cinque campi validi, ultimo accesso e screenshot compilabili', async () => {
-  const interaction = interactionFor();
-  interaction.customId = 'ticket:choose:account:reset-password';
-  let modal;
-  interaction.showModal = async value => { modal = value.toJSON(); };
-  await bot.handleButton(interaction);
-  assert.equal(modal.components.length, 5);
-  const fields = modal.components.flatMap(row => row.components);
-  assert.deepEqual(fields.map(field => field.custom_id), ['minecraft_name', 'ip_address', 'premium', 'last_server_login', 'gameplay_screenshots']);
-  assert(fields.every(field => field.label.length <= 45 && field.placeholder.length <= 100));
-  assert(fields.find(field => field.custom_id === 'last_server_login').placeholder.includes('approssimative'));
-  assert(fields.find(field => field.custom_id === 'gameplay_screenshots').placeholder.includes('dopo l’apertura'));
+test('configurazioni concorrenti e statistiche sono conservate in SQLite',async()=>{
+  const a=await bot.loadConfig(guildId),b=await bot.loadConfig(guildId);a.inactivityHours=6;b.closeAfterHours=12;
+  await Promise.all([bot.saveConfig(guildId,a),bot.saveConfig(guildId,b)]);
+  const cfg=await bot.loadConfig(guildId);assert.equal(cfg.inactivityHours,6);assert.equal(cfg.closeAfterHours,12);
+  await Promise.all(Array.from({length:8},(_,i)=>bot.recordTicket('stats',{channelId:String(i),closedAt:1})));
+  assert.equal((await bot.getRecords('stats')).length,8);
 });
-test('risposte reset password vengono salvate nel benvenuto e nella trascrizione HTML', async () => {
-  const answers = { minecraft_name: 'SteveReset', ip_address: '192.0.2.1', premium: 'Sì', last_server_login: 'Circa tre settimane fa, in serata', gameplay_screenshots: 'Sì, li allegherò nel ticket dopo l’apertura.' };
-  const interaction = interactionFor(); interaction.customId = 'ticket:modal:account:reset-password';
-  interaction.fields = { getTextInputValue: id => answers[id] };
-  await bot.handleModalSubmit(interaction);
-  const channel = [...channels.values()].find(channel => channel.topic.includes('player:SteveReset'));
-  assert(channel);
-  const welcome = JSON.stringify(channel.sent[0].components.map(component => component.toJSON()));
-  assert(welcome.includes(answers.last_server_login)); assert(welcome.includes(answers.gameplay_screenshots));
-  const report = await bot.buildTicketReport(channel, guild, 'account', { id: staffId }, []);
-  assert(report.html.includes(answers.last_server_login)); assert(report.html.includes(answers.gameplay_screenshots));
+test('classificazione confronta i canali reali e recupera cancellazioni manuali',async()=>{
+  const record=await bot.ensureTicketRegistered(first);
+  channels.delete(first.id);bot.reconcileTicketChannels(guild,channels);
+  assert.equal((await bot.ensureTicketRegistered(second)).state,'open');
+  assert.equal(bot.sqliteSearch(guildId,record.id.toLowerCase(),null,'open').length,0);
+  assert.equal(bot.closedStillOpen({guildId,ticketId:record.id}),false);
+  assert.equal(bot.closedStillOpen({guildId,channelName:second.name}),true);
+  channels.set(first.id,first);
+  await bot.updateRegistry(state=>{state.tickets[first.id].state='open';});
 });
-
-function searchInteraction({ name = null, user = null, staff = staffId } = {}) {
-  const interaction = interactionFor(staff);
-  interaction.commandName = 'search'; interaction.channel = archive;
-  interaction.member = members.get(staff); interaction.memberPermissions = noPermissions;
-  interaction.options = { data: [], getString: key => key === 'nome' ? name : null, getUser: key => key === 'utente' ? user : null };
-  interaction.reply = interaction.editReply;
-  return interaction;
+let closedId;
+test('chiusura salva riferimenti e dati ticket, non HTML nel DB',async()=>{
+  addHumanMessage(first,'CONTENUTO-SOLO-NEL-TRANSCRIPT');
+  await bot.closeTicket(first,{id:staffId},{delayMs:0});
+  const db=await bot.openTicketDatabase();
+  const ticket=db.prepare('SELECT payload FROM tickets WHERE channel_id=?').get(first.id);closedId=JSON.parse(ticket.payload).id;
+  assert.equal(JSON.parse(ticket.payload).state,'closed');
+  const entry=db.prepare('SELECT * FROM transcripts WHERE source_channel_id=?').get(first.id);
+  assert(entry);assert.equal(entry.tag,'native');assert.equal(entry.opener_id,openerId);assert(entry.message_id);
+  assert(!ticket.payload.includes('<!doctype'));assert(!entry.payload.includes('CONTENUTO-SOLO-NEL-TRANSCRIPT'));
+  assert.equal(bot.sqliteSearch(guildId,'sqlplayer',null,'closed').length,1);
+});
+test('indici e metadati resistono al riavvio',async()=>{
+  const url=new URL('../app.mjs',import.meta.url).href;
+  const script=`const b=await import(${JSON.stringify(url)});await b.initializeStorage();console.log(b.sqliteSearch(${JSON.stringify(guildId)},'sqlplayer',null,'closed').length);b.client.destroy();(await b.openTicketDatabase()).close();`;
+  const child=spawnSync(process.execPath,['--input-type=module','-e',script],{env:{...process.env,DATA_DIR:dataDir},encoding:'utf8'});
+  assert.equal(child.status,0,child.stderr);assert.equal(child.stdout.trim(),'1');
+});
+test('errore invio transcript lascia aperto il ticket e non cancella il canale',async()=>{
+  const saved=archive.send;archive.send=async()=>{throw new Error('upload failure');};
+  try{await assert.rejects(bot.closeTicket(second,{id:staffId},{delayMs:0}),/upload failure/);assert(!second.deleted);}finally{archive.send=saved;}
+  assert.equal((await bot.ensureTicketRegistered(second)).state,'open');
+});
+test('messaggio arrivato dopo snapshot causa rigenerazione prima della cancellazione',async()=>{
+  addHumanMessage(second,'inizio');const before=archive.sent.length;
+  await bot.closeTicket(second,{id:staffId},{delayMs:0,confirm:async()=>{addHumanMessage(second,'MESSAGGIO-TARDIVO');}});
+  assert(second.deleted);assert.equal(archive.sent.length,before+2);
+  const last=archive.sent.at(-1).files[0].attachment.toString();assert(last.includes('MESSAGGIO-TARDIVO'));
+});
+let legacyLog;
+async function historicMessage(log,i){
+  const card=new D.ContainerBuilder().addTextDisplayComponents(new D.TextDisplayBuilder().setContent(`Trascrizione del ticket\n**ID ticket** \`LG${String(i).padStart(4,'0')}\`\n**Canale** #archivio-${i}\n**Categoria** Assistenza account\n**Aperto da** <@${openerId}>\n**Nickname Minecraft** OldMc${i}\n**Nome Discord** UtenteStorico`));
+  const msg=await log.send({components:[card],files:[{name:`old-${i}.html`,attachment:Buffer.from('<html>HTML-NON-NEL-DATABASE</html>')}]});msg.channelId=log.id;return msg;
 }
-function payloadText(payload) {
-  const visit = node => (node.content ?? '') + (node.components ?? []).map(visit).join('\n');
-  return payload.components.map(c => visit(c.toJSON())).join('\n');
-}
-let searchRecords = [];
-test('/search è registrato e non richiede permessi amministrativi Discord', () => {
-  const command = bot.commands.find(c => c.name === 'search');
-  assert(command); assert.deepEqual(command.options.map(o => o.name), ['nome', 'utente']);
-  assert(!command.default_member_permissions);
+test('importazione log riprende dopo errore e assegna tag legacy_log a tutti i vecchi record',async()=>{
+  legacyLog=fakeChannel();channels.set(legacyLog.id,legacyLog);
+  for(let i=0;i<205;i++)await historicMessage(legacyLog,i);
+  const saved=legacyLog.messages.fetch;let calls=0;
+  legacyLog.messages.fetch=async function(options){calls++;if(calls===2)throw Error('interruzione');return saved.call(this,options);};
+  await assert.rejects(bot.importTranscriptLog(guild,legacyLog),/interruzione/);
+  const db=await bot.openTicketDatabase();assert.equal(db.prepare('SELECT count(*) n FROM transcripts WHERE log_channel_id=?').get(legacyLog.id).n,100);
+  legacyLog.messages.fetch=saved;await bot.importTranscriptLog(guild,legacyLog);
+  assert.equal(db.prepare("SELECT count(*) n FROM transcripts WHERE log_channel_id=? AND tag='legacy_log'").get(legacyLog.id).n,205);
+  assert.equal(db.prepare('SELECT backfill_complete n FROM log_sync WHERE channel_id=?').get(legacyLog.id).n,1);
+  assert.equal(bot.sqliteSearch(guildId,'oldmc0',null,'closed').length,1);
+  assert(!db.prepare('SELECT payload FROM transcripts WHERE log_channel_id=? LIMIT 1').get(legacyLog.id).payload.includes('HTML-NON-NEL-DATABASE'));
 });
-test('tutto lo staff ticket può cercare da un canale normale, anche in altre categorie accessibili', async () => {
-  for (let i = 0; i < 12; i++) {
-    const channel = fakeChannel({ topic: `Ticket di DiscordUser | opener:${openerId} | player:NomeMcRicerca | type:${i % 2 ? 'minecraft' : 'discord'} | discord_name:DiscordUser`, name: `ricerca-${i}` });
-    channel.createdTimestamp = Date.now() + i * 1000;
-    channels.set(channel.id, channel);
-    searchRecords.push(await bot.ensureTicketRegistered(channel));
-  }
-  const interaction = searchInteraction({ user: { id: openerId, username: 'DiscordUser' } });
-  await bot.handleCommand(interaction);
-  const text = payloadText(interaction.replies.at(-1));
-  assert(text.includes('Ricerca ticket')); assert(text.includes('Pagina:** 1/'));
-  assert(text.includes(searchRecords.at(-1).id)); assert(text.includes(searchRecords.at(-2).id));
-  assert.equal(interaction.replies.at(-1).allowedMentions.parse.length, 0);
+test('ricerche successive importano solo nuovi log, senza duplicare le righe',async()=>{
+  const saved=legacyLog.messages.fetch;let calls=0;legacyLog.messages.fetch=async function(options){calls++;return saved.call(this,options);};
+  await bot.importTranscriptLog(guild,legacyLog);assert.equal(calls,1);
+  await historicMessage(legacyLog,999);await bot.importTranscriptLog(guild,legacyLog);
+  const db=await bot.openTicketDatabase();assert.equal(db.prepare('SELECT count(*) n FROM transcripts WHERE log_channel_id=?').get(legacyLog.id).n,206);
+  legacyLog.messages.fetch=saved;
 });
-test('ricerca per ID ticket e nome Minecraft, senza dipendere dal nome del canale', async () => {
-  const target = searchRecords[1];
-  channels.get(target.channelId).name = 'canale-rinominato';
-  const byId = searchInteraction({ name: target.id.toLowerCase() }); await bot.handleCommand(byId);
-  assert(payloadText(byId.replies.at(-1)).includes(`Ticket \`${target.id}\``));
-  const byMc = searchInteraction({ name: 'NomeMcRicerca' }); await bot.handleCommand(byMc);
-  const text = payloadText(byMc.replies.at(-1));
-  assert(text.includes('Nickname Minecraft:** NomeMcRicerca'));
-  assert(!text.includes(searchRecords[0].id));
+test('riferimenti dei transcript vengono rinfrescati e messaggi cancellati marcati nel DB',async()=>{
+  const db=await bot.openTicketDatabase();const row=JSON.parse(db.prepare('SELECT payload FROM transcripts WHERE log_channel_id=? LIMIT 1').get(legacyLog.id).payload);
+  const msg=legacyLog.messages.cache.get(row.messageId);const attachment=[...msg.attachments.values()][0];attachment.url+='?updated=1';
+  assert((await bot.refreshClosedEntry(guild,row,legacyLog)).attachmentUrl.endsWith('?updated=1'));
+  legacyLog.messages.cache.delete(row.messageId);assert.equal(await bot.refreshClosedEntry(guild,row,legacyLog),null);
+  assert(db.prepare('SELECT deleted_at FROM transcripts WHERE message_id=?').get(row.messageId).deleted_at);
 });
-test('ricerca per nome Discord attuale e menzione restituisce i ticket del titolare', async () => {
-  const person = members.get(openerId); const before = person.user.username;
-  person.user.username = 'NomeDiscordAggiornato';
-  try {
-    const byName = searchInteraction({ name: 'NomeDiscordAggiornato' }); await bot.handleCommand(byName);
-    assert(payloadText(byName.replies.at(-1)).includes(searchRecords.at(-1).id));
-    const mention = searchInteraction({ name: `<@${openerId}>` }); await bot.handleCommand(mention);
-    assert(payloadText(mention.replies.at(-1)).includes(searchRecords.at(-1).id));
-  } finally { person.user.username = before; }
+test('politica punto 2 invariata: ruolo categoria autorizza anche senza accesso al log',()=>{
+  const viewer=members.get(staffId);const destination={permissionsFor:()=>noPermissions};
+  assert.equal(bot.closedCanView(viewer,config,destination,{categoryLabel:'Assistenza account'}),true);
 });
-test('paginazione permette di consultare anche gli ultimi risultati', async () => {
-  const interaction = searchInteraction({ user: { id: openerId, username: 'DiscordUser' } }); await bot.handleCommand(interaction);
-  const card = interaction.replies.at(-1).components[0].toJSON();
-  const next = card.components.flatMap(c => c.components ?? []).find(c => c.label === 'Successiva');
-  assert(next);
-  const [, , token] = next.custom_id.split(':');
-  const totalPages = Number(payloadText(interaction.replies.at(-1)).match(/Pagina:\*\* 1\/(\d+)/)[1]);
-  const texts = [];
-  for (let page = 0; page < totalPages; page++) {
-    await bot.renderSearchPage(interaction, token, page);
-    texts.push(payloadText(interaction.replies.at(-1)));
-  }
-  for (const record of searchRecords) assert(texts.some(text => text.includes(record.id)));
-  await bot.renderSearchPage(interaction, token, 999);
-  const lastText = payloadText(interaction.replies.at(-1));
-  assert(lastText.includes(`Pagina:** ${totalPages}/${totalPages}`));
-  assert(!lastText.includes(searchRecords.at(-1).id));
+test('download a flusso si ferma al limite e non usa arrayBuffer illimitato',async()=>{
+  const saved=globalThis.fetch;let yielded=0;
+  globalThis.fetch=async()=>({ok:true,body:{async *[Symbol.asyncIterator](){for(let i=0;i<5;i++){yielded++;yield Buffer.alloc(5);}}}});
+  try{const result=await bot.attachClosedFiles(null,[{entry:{attachmentUrl:'https://cdn.discordapp.com/test',attachmentName:'file.html',attachmentSize:1}}],8);assert.equal(result.files.length,0);assert.equal(yielded,2);assert(result.reasons.length);}finally{globalThis.fetch=saved;}
 });
-test('ricerca nega accesso ai non staff e non rivela ticket privati o chiusi', async () => {
-  const unauthorized = searchInteraction({ name: 'DiscordUser', staff: openerId }); await bot.handleCommand(unauthorized);
-  assert(payloadText(unauthorized.replies.at(-1)).includes('Solo lo staff'));
-  assert(!payloadText(unauthorized.replies.at(-1)).includes(searchRecords[0].id));
-  const hidden = channels.get(searchRecords[0].channelId), previous = hidden.permissionsFor;
-  hidden.permissionsFor = () => noPermissions;
-  try {
-    const search = searchInteraction({ name: searchRecords[0].id }); await bot.handleCommand(search);
-    assert(payloadText(search.replies.at(-1)).includes('Ticket aperti trovati:** 0'));
-  } finally { hidden.permissionsFor = previous; }
-  await bot.updateRegistry(state => { state.tickets[searchRecords[0].channelId].state = 'closed'; });
-  const closed = searchInteraction({ name: searchRecords[0].id }); await bot.handleCommand(closed);
-  assert(payloadText(closed.replies.at(-1)).includes('Ticket aperti trovati:** 0'));
-});
-test('le pagine ricontrollano i permessi e sono vincolate all’autore', async () => {
-  const interaction = searchInteraction({ name: 'DiscordUser' }); await bot.handleCommand(interaction);
-  const card = interaction.replies.at(-1).components[0].toJSON();
-  const next = card.components.flatMap(c => c.components ?? []).find(c => c.label === 'Successiva');
-  const token = next.custom_id.split(':')[2];
-  const other = searchInteraction({ staff: secondStaffId });
-  await bot.renderSearchPage(other, token, 1);
-  assert(payloadText(other.replies.at(-1)).includes('non disponibile per questo utente'));
-  const staff = members.get(staffId), previous = staff.roles.cache; staff.roles.cache = new Collection();
-  try { await bot.renderSearchPage(interaction, token, 1); assert(payloadText(interaction.replies.at(-1)).includes('Solo lo staff')); }
-  finally { staff.roles.cache = previous; }
-});
-test('regolamenti usano le nuove emoji e rispettano i limiti di testo Discord', () => {
-  for (const name of ['servermute', 'voicechat', 'domanda', 'money', 'ghost', 'voice', '955026animatedsearchlm', 'info', 'discord', 'ban', 'account', 'redx', 'spada', 'minecraft', 'vexmon']) {
-    const id = nextId(); bot.client.application.emojis.cache.set(id, { id, name, animated: false, toString: () => `<:${name}:${id}>` });
-  }
-  const mc = payloadText({ components: [bot.minecraftRulesContainer(guild)] });
-  const discord = payloadText({ components: [bot.discordRulesContainer(guild)] });
-  assert(mc.includes('<:servermute:')); assert(mc.includes('<:voicechat:'));
-  assert(mc.includes('**Crate: Key e inventario pieno**'));
-  assert.match(mc, /<:domanda:\d+> \*\*Crate/);
-  assert(mc.includes('si riserva di valutare ogni caso')); assert(mc.includes('ticket di appello'));
-  assert(discord.includes('<:voicechat:')); assert(discord.includes('<:ghost:'));
-  assert(discord.includes('Applicazione del regolamento')); assert(discord.includes('ticket di appello'));
-  assert(mc.length <= 4000); assert(discord.length <= 4000);
-  assert(bot.customEmoji(guild, 'search').includes('955026animatedsearchlm'));
+test('ogni allegato ha un nome univoco e URL esterni sono rifiutati',async()=>{
+  const saved=globalThis.fetch;globalThis.fetch=async()=>new Response('test');
+  try{const result=await bot.attachClosedFiles(null,[{entry:{messageId:'a',attachmentUrl:'https://cdn.discordapp.com/a',attachmentName:'stesso.html',attachmentSize:4}},{entry:{messageId:'b',attachmentUrl:'https://cdn.discordapp.com/b',attachmentName:'stesso.html',attachmentSize:4}},{entry:{messageId:'c',attachmentUrl:'https://example.org/x',attachmentName:'file.html'}}],100);assert.equal(result.files.length,2);assert.notEqual(result.files[0].name,result.files[1].name);}finally{globalThis.fetch=saved;}
 });
 
-test('/regole minecraft e discord cancellano tutti i messaggi, anche vecchi e di utenti', async () => {
-  for (const kind of ['minecraft', 'discord']) {
-    const channel = fakeChannel(); channels.set(channel.id, channel);
-    const old = addHumanMessage(channel, 'Messaggio vecchio'); old.createdTimestamp = Date.now() - 20 * 86400000;
-    addHumanMessage(channel, 'Messaggio utente recente 1'); addHumanMessage(channel, 'Messaggio utente recente 2');
-    const before = [...channel.messages.cache.keys()];
-    const interaction = searchInteraction(); interaction.memberPermissions = fullPermissions;
-    interaction.options = { getSubcommand: () => kind, getChannel: () => channel, getBoolean: () => false };
-    await bot.handleRules(interaction);
-    assert(before.every(id => !channel.messages.cache.has(id)));
-    assert.equal(channel.sent.length, 1); assert(old.deleted);
-    assert(payloadText(channel.sent[0]).includes(kind === 'minecraft' ? 'Regolamento Minecraft' : 'Regolamento Discord'));
-  }
+function searchInteraction(name,staff=staffId){
+  const i=interactionFor(staff);i.commandName='search';i.channel=archive;i.member=members.get(staff);i.memberPermissions=noPermissions;
+  i.options={data:[],getString:()=>name,getUser:()=>null};i.reply=i.editReply;return i;
+}
+test('/search usa SQLite e invia il transcript chiuso con un riferimento file valido',async()=>{
+  const original=globalThis.fetch;globalThis.fetch=async url=>{
+    for(const message of archive.messages.cache.values())for(const attachment of message.attachments?.values()??[])if(attachment.url===url)return new Response(attachment.testContent);
+    throw Error('URL inatteso');
+  };
+  try{
+    const i=searchInteraction(closedId);await bot.handleCommand(i);
+    const reply=i.replies.at(-1);const text=JSON.stringify(reply.components[0].toJSON());
+    assert(text.includes(closedId));assert(text.includes('Ticket chiusi trovati'));assert.equal(reply.files.length,1);
+    assert(text.includes('attachment://'+reply.files[0].name));
+  }finally{globalThis.fetch=original;}
 });
-test('schede ricerca con tutte le emoji e cinque risultati rispettano 4000 caratteri', async () => {
-  const interaction = searchInteraction({ name: 'DiscordUser' }); await bot.handleCommand(interaction);
-  const text = payloadText(interaction.replies.at(-1));
-  assert(text.includes('<:955026animatedsearchlm:'));
-  assert(text.length <= 4000);
+test('rifiuto allegati di Discord produce risposta con soli link senza file references rotti',async()=>{
+  const original=globalThis.fetch;globalThis.fetch=async()=>new Response('test');
+  const i=searchInteraction(closedId);const save=i.editReply;let failures=0;
+  i.editReply=async function(payload){if(payload.files?.length){failures++;throw Object.assign(Error('too large'),{code:40005});}return save.call(this,payload);};
+  try{
+    await bot.handleCommand(i);assert.equal(failures,1);const reply=i.replies.at(-1);assert.equal(reply.files.length,0);
+    const text=JSON.stringify(reply.components[0].toJSON());assert(!text.includes('attachment://'));assert(text.includes('Discord non ha accettato'));
+  }finally{globalThis.fetch=original;}
+});
+test('SQL archivi conserva tag e ritrova anche record senza ID ticket',async()=>{
+  const card=new D.ContainerBuilder().addTextDisplayComponents(new D.TextDisplayBuilder().setContent(`Trascrizione del ticket\n**Canale** #account-storicolegacy\n**Aperto da** <@${openerId}>\n**Nickname Minecraft** SenzaIdPlayer\n**Nome Discord** DiscordUser`));
+  const message=await legacyLog.send({components:[card],files:[{name:'old.html',attachment:Buffer.from('<html>old</html>')}]});message.channelId=legacyLog.id;
+  await bot.importTranscriptLog(guild,legacyLog);
+  const found=bot.sqliteSearch(guildId,'senzaidplayer',null,'closed');assert.equal(found.length,1);assert.equal(found[0].tag,'legacy_log');assert(!found[0].ticketId);
+});
+
+test('importazione arricchisce vecchi log dal loro HTML senza salvarne il contenuto',async()=>{
+  const card=new D.ContainerBuilder().addTextDisplayComponents(new D.TextDisplayBuilder().setContent(`Trascrizione del ticket\n**Canale** #account-legacyhtml\n**Aperto da** <@${openerId}>`));
+  const message=await legacyLog.send({components:[card],files:[{name:'old-form.html',attachment:Buffer.from('<html><b>Nickname Minecraft</b><br>PlayerDalFile<br><span>Aperto da</span><b>NomeVecchio</b><p>HTML-SEGRETO-NON-SALVARE</p></html>')}]});message.channelId=legacyLog.id;
+  const saved=globalThis.fetch;globalThis.fetch=async()=>new Response([...message.attachments.values()][0].testContent);
+  try{await bot.importTranscriptLog(guild,legacyLog);}finally{globalThis.fetch=saved;}
+  const rows=bot.sqliteSearch(guildId,'playerdalfile',null,'closed');assert.equal(rows.length,1);assert.equal(rows[0].tag,'legacy_log');assert(!JSON.stringify(rows[0]).includes('HTML-SEGRETO'));
+});
+test('risposta durante chiusura automatica annulla la cancellazione anche alla verifica finale',async()=>{
+  const i=interactionFor();await bot.createTicket(i,'minecraft','vexmon',{minecraft_name:'AutoCancel'});
+  const channel=[...channels.values()].find(c=>c.topic.includes('player:AutoCancel'));let checks=0;
+  const result=await bot.closeTicket(channel,{id:staffId},{delayMs:0,beforeDelete:async()=>++checks===1});
+  assert.equal(result,false);assert(!channel.deleted);assert.equal((await bot.ensureTicketRegistered(channel)).state,'open');
+});
+
+test('backfill lento restituisce risultati parziali e riprende dal messaggio esatto',async()=>{
+  const log=fakeChannel();channels.set(log.id,log);for(let i=0;i<3;i++)await historicMessage(log,800+i);
+  const now=Date.now;const base=now();let calls=0;Date.now=()=>base+(calls++?9000:0);
+  let outcome;try{outcome=await bot.importTranscriptLog(guild,log);}finally{Date.now=now;}
+  assert(outcome.partial);const db=await bot.openTicketDatabase();assert.equal(db.prepare('SELECT count(*) n FROM transcripts WHERE log_channel_id=?').get(log.id).n,1);
+  await bot.importTranscriptLog(guild,log);assert.equal(db.prepare('SELECT count(*) n FROM transcripts WHERE log_channel_id=?').get(log.id).n,3);
+});
+test('amministratore permanente resta autorizzato indipendentemente dai ruoli',async()=>{
+  const i=interactionFor('1076582008270114958');i.memberPermissions=noPermissions;
+  assert(await bot.isBotAdmin(i));assert(await bot.canManageTicket(i,'minecraft'));assert(await bot.canViewTicketStats(i));
 });

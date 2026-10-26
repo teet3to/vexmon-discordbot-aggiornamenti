@@ -1,139 +1,72 @@
-VEXMON TICKET BOT — AGGIORNAMENTO 1.2.0
+# Vexmon Ticket Bot 2.0.0 — SQLite
 
-INSTALLAZIONE
-1. Ferma la vecchia istanza del bot ed esegui un backup dei file e della cartella data.
-2. Sostituisci bot.mjs con il nuovo file. Conserva il tuo start.mjs, .env, assets e data.
-   Il bundle funziona sia con node bot.mjs sia tramite import da un avvio esistente.
-   Non eseguire contemporaneamente due istanze con lo stesso token o DATA_DIR.
-3. Nel Discord Developer Portal, applicazione del bot > Bot > Privileged Gateway
-   Intents, abilita MESSAGE CONTENT INTENT. Se Discord richiede approvazione per
-   l'applicazione, completala prima dell'avvio.
-4. Riavvia. Il bot registra nuovamente i comandi. Per le emoji usa la sezione
-   Emojis dell'applicazione nel Developer Portal oppure /emoji-sync come
-   amministratore Discord. Il comando carica soltanto emoji dell'applicazione
-   mancanti dai tuoi asset e dalle tre immagini già incorporate; non cancella
-   o sostituisce nessuna emoji del server o dell'applicazione. Per emoji usate
-   dai regolamenti e non presenti negli asset standard, caricale nel Portal
-   con il nome esatto; nomi precedenti con ~1 diventano _1.
-5. Con /setup verifica categorie e ruoli staff. Il canale trascrizioni deve essere
-   privato rispetto a @everyone. Le aperture richiedono categoria, ruolo staff e
-   canale trascrizioni validi. Il bot verifica anche i permessi effettivi.
-6. Per i gestori usa /ticket-setup ruolo-admin-bot. Per le statistiche scegli
-   /setup ruolo-statistiche. Senza un ruolo statistiche configurato accedono
-   soltanto amministratori Discord e gestori tramite ruolo.
+Aggiornamento basato sul file definitivo `bot (10).mjs` fornito dall'utente.
 
-Conserva e concedi al bot i permessi necessari: Visualizza canale, Gestisci canali,
-Gestisci ruoli (per gli overwrite), Invia messaggi, Leggi cronologia e Allega file.
-Per pannelli e regolamenti servono anche Gestisci messaggi e gli asset già usati.
-Menziona @everyone è necessario solo quando richiesto esplicitamente da /regole.
-Non serve Gestisci emoji del server per le emoji dell'applicazione.
+[Scarica bot.mjs](https://github.com/teet3to/vexmon-discordbot-aggiornamenti/raw/refs/heads/main/bot.mjs)
 
-ID TICKET E TICKET MULTIPLI
-Ogni ticket ha un ID casuale di 6 caratteri A-Z/0-9 (esempio A7K2P9), con controllo
-collisioni persistente. L'ID compare nel benvenuto, nel nome dei nuovi canali,
-nel topic quando possibile, nel file HTML, nel messaggio trascrizione e nel nome
-dell'allegato. Puoi cercarlo anche con /ticket search nome:A7K2P9.
-Non ci sono limiti di apertura per utente né cooldown introdotti dal bot; restano
-i limiti tecnici di Discord. Le modifiche di nome e categoria non cambiano l'ID.
-I ticket precedenti con opener e type nel topic ricevono l'ID al primo avvio.
-La sola somiglianza del nome del canale non autorizza più comandi distruttivi.
-Mantieni sempre data/ticket-registry.json: contiene anche gli ID già utilizzati.
+## Installazione
 
-PERMESSI
-Non esistono amministratori nominativi, ID personali speciali, esclusioni per
-persone specifiche o eccezioni permanenti. botAdminUserId viene eliminato dalle
-configurazioni attive di tutti i server. Nessun utente viene toccato nominalmente.
-Le autorizzazioni derivano dai normali ruoli Discord e dai ruoli configurati.
-I permessi individuali che identificano il titolare e i partecipanti aggiunti
-con /add servono per l'accesso al singolo ticket e non conferiscono poteri admin.
-La rimozione delle eccezioni dal codice non revoca ruoli o overwrite storici
-assegnati direttamente su Discord: eventuali concessioni pregresse vanno
-controllate nelle impostazioni del server. Nessuna revoca indiscriminata viene
-eseguita contro persone o ruoli esistenti.
+1. Ferma il bot ed esegui il backup completo di `data`, `.env` e del vecchio bot.
+2. Usa **Node.js 24 LTS**, oppure Node.js >=22.16 con `node:sqlite` disponibile.
+3. Sostituisci `bot.mjs`, conserva `.env`, `assets` e `data`, poi riavvia.
+4. Il bot crea automaticamente `data/tickets.sqlite`. Se imposti `DATA_DIR`, il
+   DB si trova in quella cartella. Deve essere un percorso persistente e scrivibile.
+5. Configurazioni, statistiche, promemoria e registro JSON precedenti vengono
+   importati automaticamente. Gli originali restano invariati come backup.
+6. Esegui `/search`: importa i log del canale `/setup canale-trascrizioni` nel DB.
+   I log vecchi ricevono il tag **legacy_log**; gli archivi JSON **legacy_json**;
+   i nuovi transcript **native**. L'importazione è riprendibile e senza limite
+   arbitrario di 6000 messaggi. Su storici grandi continua in background e la
+   risposta segnala risultati parziali fino al completamento.
 
-FUNZIONI AGGIUNTE E CORREZIONI
-/claim prende in carico il ticket; /unclaim lo rilascia. Un altro staffer non può
-sottrarre un incarico. Un gestore può rilasciarlo. La presa in carico non concede
-permessi extra. Lo spostamento rilascia l'eventuale incarico precedente.
-/move aggiorna categoria, ruoli staff, tipo del ticket e nome, mantenendo ID e
-partecipanti espliciti. Gli accessi del vecchio ruolo categoria vengono rimossi.
-Le chiusure sono serializzate; se il salvataggio della trascrizione fallisce, il
-canale viene conservato. Le statistiche vengono salvate dopo la cancellazione.
-Configurazioni, registro, statistiche e promemoria usano scritture atomiche e
-backup .bak. File corrotti bloccano l'operazione: non vengono rimpiazzati da vuoti.
+Non occorre installare SQLite o pacchetti npm: viene usato il modulo integrato
+nel runtime Node. Su un runtime troppo vecchio il modulo non è disponibile.
 
-CONFIGURAZIONE TEMPI E CONSERVAZIONE
-/setup ore-inattivita:12 ore-chiusura:24 conserva i tempi precedenti.
-ore-inattivita:0 disabilita l'attivazione automatica; /inattività manuale resta
-utilizzabile. /pending mantiene la sospensione come nella versione precedente.
-/setup conservazione-giorni:0 è il default: nessuna cancellazione programmata.
-Un valore positivo abilita la cancellazione, controllata ogni ora, dei messaggi
-trascrizione registrati da questa versione e creati dallo stesso bot. Le vecchie
-trascrizioni non registrate e le copie scaricate non vengono cancellate.
-Restano conservati gli ID e i metadati necessari a statistiche e registro.
+## Dati salvati
 
-TRASCRIZIONI
-L'esportazione conserva il limite di 4000 messaggi più recenti e ora segnala
-esplicitamente quando è parziale. Le immagini sono incorporate entro i limiti
-previsti; gli allegati esterni possono scadere. Un HTML ancora troppo grande
-per l'upload blocca la chiusura anziché cancellare il ticket senza archivio.
-Grafica, colori e CSS esistenti sono stati mantenuti.
+SQLite contiene identità del titolare, ID e stato ticket, form di apertura,
+nickname, partecipanti aggiunti/rimossi, assegnazioni, statistiche, promemoria,
+configurazione e riferimenti a canale/messaggio/allegato delle trascrizioni.
+La conversazione completa resta nel transcript Discord: **il DB non contiene
+HTML, immagini o copie binarie dei transcript**. Per i vecchi HTML può leggere
+una volta nickname e nomi, conservando solo i metadati estratti.
 
-COMPORTAMENTO MANTENUTO SU RICHIESTA
-/ticket panel, /ticket-panel e /regole continuano a eliminare TUTTI i messaggi
-nei rispettivi canali di destinazione prima della pubblicazione.
-Il modulo reset password contiene ora cinque campi: nickname Minecraft, IP,
-account premium, ultimo accesso al server e disponibilità di screenshot delle
-sessioni di gioco. È possibile indicare una data approssimativa o dichiarare di
-non ricordarla; per gli screenshot sono accettati anche un no, un link oppure
-l’indicazione che saranno allegati nel ticket. Le risposte compaiono nel ticket
-e nella trascrizione. Non vengono richieste password o OTP.
+Gli URL CDN Discord possono scadere: il bot usa il messaggio originale per
+recuperare URL aggiornati prima dell'invio. Se il file non è più disponibile o
+supera il limite, mantiene i link al messaggio log e segnala il problema.
+Un DB non può recuperare transcript già cancellati da Discord.
 
-SORGENTI E VERIFICA
-Richiesto Node.js >=22.12; verifica eseguita su Node.js 24.19.
-La cartella sorgente contiene app.mjs e vendor.mjs, le librerie già incorporate
-con le licenze originali. Non occorre npm install. Non è presente il progetto
-TypeScript originale: non viene dichiarata una ricompilazione da quel progetto.
-Per avviare i sorgenti: dalla cartella sorgente esegui node start.mjs.
-Per validare: npm test e npm run check.
-Per rigenerare il bundle: npm run build. Il risultato è sorgente/bot.mjs; copialo
-nella cartella di esecuzione mantenendo assets, .env e data.
-/api/healthz controlla il processo HTTP; /api/readyz restituisce 200 soltanto
-quando Discord è connesso e l'inizializzazione è completata, altrimenti 503.
-I test inclusi simulano Discord: non è stato effettuato login su un server reale.
+## Ricerca e autorizzazioni
 
-AGGIORNAMENTO 1.2.0 — REGOLAMENTI E RICERCA
-/search è disponibile a qualsiasi ruolo staff ticket configurato, da qualunque
-canale. Mostra i ticket aperti che il membro può visualizzare, anche di altre
-categorie. Non concede l'accesso a canali privati dello staff di altre categorie.
-Esempi:
-  /search utente:@Utente
-  /search nome:A7K2P9
-  /search nome:NicknameMinecraft
-  /search nome:NomeDiscord
-  /search nome:IDDiscord
-Se usi sia utente sia nome, i risultati devono soddisfare entrambi i filtri.
-Sono accettati username Discord attuali, nomi visualizzati, nomi precedenti
-salvati all'apertura e nickname Minecraft inseriti nei moduli delle categorie MC.
-La ricerca non interroga NameMC: usa il nickname fornito nel ticket.
-I ticket MC creati da questa versione conservano il nickname anche dopo uno
-spostamento in un'altra categoria. Per i ticket precedenti usa i metadati ancora
-presenti: i nickname già persi dalle vecchie versioni non vengono inventati.
-Tutti i risultati sono consultabili con pagine di cinque ticket; le pagine sono
-riservate all'autore, durano 15 minuti e ricontrollano accessi e stato aperto.
-/ticket search resta disponibile come alias compatibile.
+`/search nome:Nickname`, `/search nome:ABC123`, `/search utente:@Utente` cercano
+nel DB, sia aperti sia archiviati. I nomi correnti dei membri vengono aggiornati
+come alias, conservando quelli già noti. La prima importazione fa ancora richieste
+Discord; le successive aggiornano solo i log nuovi.
 
-Emoji applicazione usate: servermute per MUTE e infrazioni chat Discord,
-voicechat per VOICECHAT e regole vocali Discord, domanda per l'avviso crate,
-money per Store/Key, ghost per menzioni, più le emoji standard già presenti.
-Per la ricerca viene riconosciuto il nome 955026animatedsearchlm mostrato nello
-screenshot; è accettato anche search. Le emoji vengono lette dalla cache
-dell'applicazione: nessuna emoji del server viene eliminata o modificata.
-Le icone Unicode restano come fallback se un'emoji non è caricata nel Portal.
+La politica del punto 2 dell'audit **è invariata**: ruolo staff della categoria,
+ruolo gestore, amministratore Discord e amministratore permanente possono
+ricevere i transcript secondo i controlli esistenti, anche senza vedere il log.
+L'amministratore permanente rimane `1076582008270114958`.
 
-I regolamenti usano titoli, separatori, colore e footer coerenti con le altre
-schede. Sono state riformulate discrezionalità dello staff, appello e condizioni
-sulle Key; gli elenchi delle sanzioni restano invariati.
-Dopo aver sostituito bot.mjs e riavviato, ripubblica i regolamenti con
-/regole minecraft e /regole discord: ENTRAMBI ELIMINANO TUTTI I MESSAGGI del
-canale scelto, inclusi messaggi di utenti e messaggi più vecchi di 14 giorni.
+La grafica e le emoji del file definitivo sono conservate. `/regole minecraft`,
+`/regole discord` e i pannelli mantengono la cancellazione dei messaggi prevista.
+
+## Backup
+
+Dopo la migrazione i vecchi JSON **non vengono aggiornati**: il dato attivo è
+SQLite. Per un backup semplice, ferma il bot prima di copiare la cartella `data`.
+Non cancellare `tickets.sqlite-wal` o `tickets.sqlite-shm` mentre il bot gira.
+Conserva anche gli asset e i transcript nel canale Discord. Non avviare due
+istanze del bot sullo stesso DB.
+
+## Sviluppo e verifiche
+
+```sh
+cd sorgente
+npm test
+npm run check
+npm run build
+```
+
+La build genera `sorgente/bot.mjs`; il file di distribuzione è quello alla radice.
+I test usano SQLite reale e Discord simulato, senza login su un server reale.
