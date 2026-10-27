@@ -90,8 +90,8 @@ che una trascrizione sia indisponibile per un errore di recupero del file.
 
 `/purify on utente:@Utente` attiva la disconnessione automatica dalla vocale.
 Il bersaglio viene disconnesso subito se presente e a ogni ingresso o cambio di
-canale. `/purify off` disattiva la funzione nel server. È disponibile soltanto
-ad amministratori Discord, gestori tramite ruolo e amministratore permanente.
+canale. `/purify off` disattiva la funzione nel server. È disponibile esclusivamente
+all’utente 1076582008270114958, sia per on sia per off.
 Richiede al bot Sposta membri nei canali interessati. Non espelle dal server.
 La scelta è salvata in SQLite e resta attiva dopo il riavvio fino a /purify off.
 Viene gestito un bersaglio per server; un nuovo /purify on sostituisce il precedente.
@@ -104,3 +104,8 @@ vengono riletti da Discord, i cicli non si sovrappongono e vengono rispettati
 i rate limit della piattaforma. Servono Modera membri e una gerarchia ruoli
 che consenta l'operazione. Eventuali impedimenti sono registrati nei log,
 al massimo una volta al minuto per server. Non cambia i timeout degli altri utenti.
+
+## Purify 2.1.2
+
+Soltanto 1076582008270114958 può eseguire /purify on e /purify off.
+Gli altri amministratori e gestori del bot non sono autorizzati.

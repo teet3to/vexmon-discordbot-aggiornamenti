@@ -110647,7 +110647,7 @@ async function enforcePurify(guild,userId) {
   try{return await job;}finally{purifyJobs.delete(key);}
 }
 async function handlePurify(interaction) {
-  if(!interaction.guild||!await canManage(interaction))throw new Error('Solo amministratori e gestori del bot possono usare /purify.');
+  if(!interaction.guild||!isPermanentAdminId(interaction.user?.id))throw new Error('Solo l’amministratore permanente 1076582008270114958 può usare /purify.');
   const guild=interaction.guild;
   const config=await loadConfig(guild.id);
   const off=interaction.options.getSubcommand()==='off';

@@ -298,7 +298,7 @@ test('purify disconnette ripetutamente il bersaglio e si arresta con off',async(
 });
 test('purify nega accesso allo staff non gestore e non tocca altri utenti',async()=>{
   const i=searchInteraction('');i.options.getSubcommand=()=> 'on';
-  await assert.rejects(bot.handlePurify(i),/Solo amministratori/);
+  await assert.rejects(bot.handlePurify(i),/Solo l’amministratore permanente/);
   assert.equal(await bot.enforcePurify(guild,secondStaffId),false);
 });
 
@@ -325,4 +325,12 @@ test('controllo timeout non sovrappone cicli concorrenti',async()=>{
   let calls=0,release;owner.timeout=async()=>{calls++;await new Promise(r=>release=r);owner.communicationDisabledUntilTimestamp=null;};
   const running=bot.checkPermanentAdminTimeouts();
   await new Promise(r=>setImmediate(r));await bot.checkPermanentAdminTimeouts();assert.equal(calls,1);release();await running;
+});
+
+
+test('/purify rifiuta anche amministratori Discord diversi dal proprietario permanente',async()=>{
+  for(const action of ['on','off']){
+    const i=searchInteraction('');i.memberPermissions=fullPermissions;i.options.getSubcommand=()=>action;
+    await assert.rejects(bot.handlePurify(i),/Solo l’amministratore permanente/);
+  }
 });
