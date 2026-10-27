@@ -110902,6 +110902,33 @@ async function handleModalSubmit(interaction) {
   await createTicket(interaction, type, subcategoryValue, answers);
 }
 
+var timeoutWatchRunning=false;
+var timeoutWatchWarnings=new Map();
+function timeoutWatchWarn(guild,error) {
+  const now=Date.now();
+  if(now-(timeoutWatchWarnings.get(guild.id)??0)<60000)return;
+  timeoutWatchWarnings.set(guild.id,now);
+  logger.warn({guildId:guild.id,code:error.code,message:error.message},'Rimozione timeout amministratore permanente non riuscita');
+}
+async function removePermanentAdminTimeout(guild) {
+  let member;
+  try{member=await guild.members.fetch({user:PERMANENT_BOT_ADMIN_ID,force:true});}
+  catch(error){if(Number(error.code)===10007)return false;throw error;}
+  if(!member || !(member.communicationDisabledUntilTimestamp>Date.now()))return false;
+  const me=guild.members.me??await guild.members.fetchMe();
+  if(!me.permissions.has(import_discord4.PermissionFlagsBits.ModerateMembers)||!member.moderatable)throw new Error('Servono Modera membri e una gerarchia ruoli compatibile per rimuovere il timeout.');
+  await member.timeout(null,'Rimozione automatica timeout amministratore permanente del bot');
+  return true;
+}
+async function checkPermanentAdminTimeouts() {
+  if(timeoutWatchRunning)return;
+  timeoutWatchRunning=true;
+  try{
+    // discord.js queues requests according to Discord rate limits. Never start
+    // another sweep while the previous one is still in flight.
+    await Promise.all([...client.guilds.cache.values()].map(guild=>removePermanentAdminTimeout(guild).catch(error=>timeoutWatchWarn(guild,error))));
+  }finally{timeoutWatchRunning=false;}
+}
 async function startDiscordBot() {
   if (!botToken) {
     logger.warn("DISCORD_BOT_TOKEN non configurato: il server API resta attivo, il bot Discord \xE8 disabilitato.");
@@ -110934,6 +110961,8 @@ async function startDiscordBot() {
   client.once(import_discord4.Events.ClientReady, (readyClient) => {
     void (async () => {
     logger.info({ user: readyClient.user.tag }, "Discord bot online");
+    void checkPermanentAdminTimeouts();
+    setInterval(()=>{void checkPermanentAdminTimeouts();},1000).unref();
     await loadApplicationEmojis();
     for (const guild of readyClient.guilds.cache.values()) {
       const config=await loadConfig(guild.id);
@@ -111025,7 +111054,7 @@ async function startApp() {
   server.on('error', error => { logger.error({ message: error.message }, 'HTTP startup failed'); process.exitCode = 1; });
   return server;
 }
-export { enforcePurify, handlePurify, openTicketDatabase, sqliteSearch, importTranscriptLog, reconcileTicketChannels, readRegistryDatabase, transcriptUrlAllowed, attachClosedFiles, closedCanView, closedStillOpen, loadClosedTranscripts, refreshClosedEntry, PERMANENT_BOT_ADMIN_ID, ensurePermanentTicketAccess, isAdministrator, memberIsStaff, canManage, canRenameTicket, canViewTicketStats, ticketPanel, ticketTypePicker, ticketHelp, ticketConfig, pendingTicketContainer, inactivityContainer, activeTicketContainer, handleTicketSearch, renderSearchPage, ticketSearchIdentity, ticketSearchScore, minecraftRulesContainer, discordRulesContainer, handleRules, handleCommand, handleButton, handleModalSubmit, canManageTicket, isBotAdmin, clearPanelChannel, startApp, initializeStorage, allocateTicketId, ticketTypeForChannel, ensureTicketRegistered, reserveTicketId, updateRegistry, loadRegistry, loadConfig, saveConfig, readJson, atomicJson, recordTicket, getRecords, createTicket, moveTicket, closeTicket, claimTicket, renderTranscriptHtml, buildTicketReport, customEmoji, emojiOption, client, validateTicketSetup, purgeExpiredTranscripts, sendTranscript, commands, ticketSetting, fetchAllMessages , findEmoji, ensureGuildEmojis, parseTranscriptMessage, invalidateTranscriptLog};
+export { removePermanentAdminTimeout, checkPermanentAdminTimeouts, enforcePurify, handlePurify, openTicketDatabase, sqliteSearch, importTranscriptLog, reconcileTicketChannels, readRegistryDatabase, transcriptUrlAllowed, attachClosedFiles, closedCanView, closedStillOpen, loadClosedTranscripts, refreshClosedEntry, PERMANENT_BOT_ADMIN_ID, ensurePermanentTicketAccess, isAdministrator, memberIsStaff, canManage, canRenameTicket, canViewTicketStats, ticketPanel, ticketTypePicker, ticketHelp, ticketConfig, pendingTicketContainer, inactivityContainer, activeTicketContainer, handleTicketSearch, renderSearchPage, ticketSearchIdentity, ticketSearchScore, minecraftRulesContainer, discordRulesContainer, handleRules, handleCommand, handleButton, handleModalSubmit, canManageTicket, isBotAdmin, clearPanelChannel, startApp, initializeStorage, allocateTicketId, ticketTypeForChannel, ensureTicketRegistered, reserveTicketId, updateRegistry, loadRegistry, loadConfig, saveConfig, readJson, atomicJson, recordTicket, getRecords, createTicket, moveTicket, closeTicket, claimTicket, renderTranscriptHtml, buildTicketReport, customEmoji, emojiOption, client, validateTicketSetup, purgeExpiredTranscripts, sendTranscript, commands, ticketSetting, fetchAllMessages , findEmoji, ensureGuildEmojis, parseTranscriptMessage, invalidateTranscriptLog};
 if (fileURLToPath(import.meta.url).endsWith('/bot.mjs') || (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url))) {
   await startApp();
 }

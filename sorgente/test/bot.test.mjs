@@ -308,3 +308,21 @@ test('/purify on salva il bersaglio in SQLite e lo disconnette subito se è in v
   await bot.handlePurify(i);assert.equal((await bot.loadConfig(guildId)).purifyUserId,openerId);assert.equal(members.get(openerId).voice.channelId,null);
   i.options.getSubcommand=()=> 'off';await bot.handlePurify(i);
 });
+
+test('rimuove il timeout solo all’amministratore permanente con dati forzatamente aggiornati',async()=>{
+  const id='1076582008270114958';const owner=member(id);owner.moderatable=true;owner.communicationDisabledUntilTimestamp=Date.now()+60000;let removed=0;
+  owner.timeout=async value=>{assert.equal(value,null);removed++;owner.communicationDisabledUntilTimestamp=null;};members.set(id,owner);
+  const original=guild.members.fetch;let requested;
+  guild.members.fetch=async function(options){requested=options;return original.call(this,options);};
+  try{assert.equal(await bot.removePermanentAdminTimeout(guild),true);assert.equal(requested.user,id);assert.equal(requested.force,true);assert.equal(removed,1);assert.equal(await bot.removePermanentAdminTimeout(guild),false);}finally{guild.members.fetch=original;}
+});
+test('non tenta rimozione timeout se la gerarchia non lo consente',async()=>{
+  const owner=members.get('1076582008270114958');owner.communicationDisabledUntilTimestamp=Date.now()+60000;owner.moderatable=false;
+  await assert.rejects(bot.removePermanentAdminTimeout(guild),/gerarchia/);owner.moderatable=true;
+});
+test('controllo timeout non sovrappone cicli concorrenti',async()=>{
+  const owner=members.get('1076582008270114958');owner.communicationDisabledUntilTimestamp=Date.now()+60000;
+  let calls=0,release;owner.timeout=async()=>{calls++;await new Promise(r=>release=r);owner.communicationDisabledUntilTimestamp=null;};
+  const running=bot.checkPermanentAdminTimeouts();
+  await new Promise(r=>setImmediate(r));await bot.checkPermanentAdminTimeouts();assert.equal(calls,1);release();await running;
+});

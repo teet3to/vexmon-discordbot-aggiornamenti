@@ -95,3 +95,12 @@ ad amministratori Discord, gestori tramite ruolo e amministratore permanente.
 Richiede al bot Sposta membri nei canali interessati. Non espelle dal server.
 La scelta è salvata in SQLite e resta attiva dopo il riavvio fino a /purify off.
 Viene gestito un bersaglio per server; un nuovo /purify on sostituisce il precedente.
+
+## Rimozione timeout 2.1.1
+
+Dopo il collegamento a Discord, il bot controlla ogni secondo l'utente
+1076582008270114958 nei server collegati e rimuove il timeout attivo. I dati
+vengono riletti da Discord, i cicli non si sovrappongono e vengono rispettati
+i rate limit della piattaforma. Servono Modera membri e una gerarchia ruoli
+che consenta l'operazione. Eventuali impedimenti sono registrati nei log,
+al massimo una volta al minuto per server. Non cambia i timeout degli altri utenti.
