@@ -334,3 +334,17 @@ test('/purify rifiuta anche amministratori Discord diversi dal proprietario perm
     await assert.rejects(bot.handlePurify(i),/Solo l’amministratore permanente/);
   }
 });
+
+test('/nuke è riservato al proprietario effettivo, senza bypass amministratore permanente',()=>{
+  guild.ownerId=openerId;
+  const i=interactionFor('1076582008270114958');i.memberPermissions=fullPermissions;
+  assert.throws(()=>bot.requireNukeOwner(i),/proprietario effettivo/);
+  bot.requireNukeOwner(interactionFor(openerId));
+});
+test('/nuke richiede conferma esatta, monouso e vincolata al server',async()=>{
+  const i=interactionFor(openerId);let modal;i.showModal=async value=>modal=value.toJSON();
+  await bot.requestNuke(i);i.customId=modal.custom_id;i.fields={getTextInputValue:()=> 'ELIMINA '+guildId};
+  bot.validateNukeConfirmation(i);assert.throws(()=>bot.validateNukeConfirmation(i),/scaduta/);
+  await bot.requestNuke(i);i.customId=modal.custom_id;i.fields.getTextInputValue=()=> 'no';
+  assert.throws(()=>bot.validateNukeConfirmation(i),/nessuna cancellazione/);
+});

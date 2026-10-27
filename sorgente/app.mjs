@@ -1435,6 +1435,7 @@ async function handleRules(interaction) {
 }
 
 var commands = [
+  new import_discord4.SlashCommandBuilder().setName('nuke').setDescription('Proprietario: elimina la struttura del server dopo conferma esplicita'),
   new import_discord4.SlashCommandBuilder().setName('purify').setDescription('Gestisci la disconnessione automatica di un utente dalla vocale')
     .addSubcommand(o=>o.setName('on').setDescription('Disconnetti un utente ogni volta che entra in vocale').addUserOption(u=>u.setName('utente').setDescription('Utente da disconnettere').setRequired(true)))
     .addSubcommand(o=>o.setName('off').setDescription('Disattiva la disconnessione automatica in questo server')),
@@ -2695,7 +2696,62 @@ async function handlePurify(interaction) {
   }
   return respondToInteraction(interaction,{components:[commandCard(guild,off?'Purify disattivato':'Purify attivato',[off?'La disconnessione automatica è stata disattivata in questo server.':`<@${config.purifyUserId}> verrà disconnesso ogni volta che entra o cambia canale vocale. Usa /purify off per interrompere.`],{icon:'voicechat'})],flags:import_discord4.MessageFlags.IsComponentsV2|import_discord4.MessageFlags.Ephemeral,allowedMentions:{parse:[]}});
 }
+var nukeConfirmations=new Map();
+var nukeRunning=new Set();
+function requireNukeOwner(interaction){
+  if(!interaction.guild||interaction.user.id!==interaction.guild.ownerId)throw new Error('Solo il proprietario effettivo del server può usare /nuke.');
+}
+async function requestNuke(interaction){
+  requireNukeOwner(interaction);
+  const now=Date.now();for(const [id,session]of nukeConfirmations)if(session.expiresAt<now)nukeConfirmations.delete(id);
+  if(nukeRunning.has(interaction.guild.id))throw new Error('Cancellazione già in corso.');
+  const token=randomUUID();nukeConfirmations.set(token,{guildId:interaction.guild.id,userId:interaction.user.id,expiresAt:now+60000});
+  const modal=new import_discord4.ModalBuilder().setCustomId('nuke:confirm:'+token).setTitle('Cancellazione irreversibile del server');
+  modal.addComponents(new import_discord4.ActionRowBuilder().addComponents(new import_discord4.TextInputBuilder().setCustomId('confirmation').setLabel('Scrivi ELIMINA seguito dall’ID del server').setPlaceholder('ELIMINA '+interaction.guild.id).setStyle(import_discord4.TextInputStyle.Short).setRequired(true)));
+  await interaction.showModal(modal);
+}
+function validateNukeConfirmation(interaction){
+  requireNukeOwner(interaction);
+  const token=interaction.customId.split(':')[2];const session=nukeConfirmations.get(token);
+  if(!session||session.expiresAt<Date.now()||session.userId!==interaction.user.id||session.guildId!==interaction.guild.id)throw new Error('Conferma scaduta o non valida.');
+  nukeConfirmations.delete(token);
+  if(interaction.fields.getTextInputValue('confirmation').trim()!=='ELIMINA '+interaction.guild.id)throw new Error('Conferma non corrispondente: nessuna cancellazione eseguita.');
+}
+async function confirmNuke(interaction){
+  validateNukeConfirmation(interaction);
+  const guild=interaction.guild;
+  if(nukeRunning.has(guild.id))throw new Error('Cancellazione già in corso.');
+  nukeRunning.add(guild.id);
+  try{
+    await deferInteraction(interaction,{flags:import_discord4.MessageFlags.Ephemeral});
+    // Recheck the current server owner before collecting or deleting resources.
+    if(guild.fetch)await guild.fetch();requireNukeOwner(interaction);
+    const me=await guild.members.fetchMe();
+    if(!me.permissions.has(import_discord4.PermissionFlagsBits.Administrator))throw new Error('Il bot deve avere Administrator per eseguire questa operazione.');
+    const [channels,roles,emojis,stickers,events]=await Promise.all([guild.channels.fetch(),guild.roles.fetch(),guild.emojis.fetch(),guild.stickers.fetch(),guild.scheduledEvents.fetch()]);
+    const folder=resolve(dataDir,'nuke-backups');await mkdir(folder,{recursive:true});
+    const snapshot=resolve(folder,`${guild.id}-${Date.now()}-${randomUUID()}.json`);
+    const json=value=>JSON.stringify(value,(_,v)=>typeof v==='bigint'?v.toString():v,2);
+    const serialize=items=>[...items.values()].filter(Boolean).map(item=>item.toJSON());
+    await writeFile(snapshot,json({guildId:guild.id,ownerId:guild.ownerId,at:Date.now(),channels:serialize(channels),roles:serialize(roles),emojis:serialize(emojis),stickers:serialize(stickers),events:serialize(events),notice:'Solo struttura: messaggi, allegati e transcript non sono inclusi.'}),{encoding:'utf8',mode:0o600,flag:'wx'});
+    await interaction.editReply({content:'Conferma ricevuta. Cancellazione avviata: messaggi e transcript nei canali eliminati non sono recuperabili.'});
+    const config=await loadConfig(guild.id);delete config.purifyUserId;await saveConfig(guild.id,config);
+    const result={deleted:0,failed:[],skippedRoles:[]};
+    const remove=async item=>{try{await item.delete('Nuke confermato dal proprietario del server');result.deleted++;}catch(error){result.failed.push({id:item.id,code:error.code,message:error.message});}};
+    for(const event of events.values())await remove(event);
+    for(const channel of [...channels.values()].filter(Boolean).sort((a,b)=>Number(a.type===import_discord4.ChannelType.GuildCategory)-Number(b.type===import_discord4.ChannelType.GuildCategory)))await remove(channel);
+    for(const role of [...roles.values()].sort((a,b)=>b.position-a.position)){
+      if(role.id===guild.id||role.managed||!role.editable){result.skippedRoles.push(role.id);continue;}await remove(role);
+    }
+    for(const emoji of emojis.values())await remove(emoji);
+    for(const sticker of stickers.values())await remove(sticker);
+    await writeFile(snapshot+'.result.json',json(result),{encoding:'utf8',mode:0o600,flag:'wx'});
+    logger.info({guildId:guild.id,...result},'Nuke completato');
+    await interaction.editReply({content:`Operazione terminata. Elementi eliminati: ${result.deleted}. Non eliminati: ${result.failed.length}. Ruoli protetti: ${result.skippedRoles.length}.`}).catch(()=>{});
+  }finally{nukeRunning.delete(guild.id);}
+}
 async function handleCommand(interaction) {
+  if(interaction.commandName==='nuke')return requestNuke(interaction);
   logCommand(interaction);
   if(interaction.commandName==='purify'){await deferInteraction(interaction,{flags:import_discord4.MessageFlags.Ephemeral});return handlePurify(interaction);}
   const publicReply = ['close', 'move', 'add', 'kick', 'rename'].includes(interaction.commandName);
@@ -2920,6 +2976,7 @@ async function handleStringSelect(interaction) {
   await showTicketModal(interaction, type, subcategoryValue);
 }
 async function handleModalSubmit(interaction) {
+  if(interaction.customId.startsWith('nuke:confirm:'))return confirmNuke(interaction);
   if (!interaction.customId.startsWith("ticket:modal:")) return;
   const [, , type, subcategoryValue] = interaction.customId.split(":");
   const subcategory = subcategoryFor(type, subcategoryValue);
@@ -3079,7 +3136,7 @@ async function startApp() {
   server.on('error', error => { logger.error({ message: error.message }, 'HTTP startup failed'); process.exitCode = 1; });
   return server;
 }
-export { removePermanentAdminTimeout, checkPermanentAdminTimeouts, enforcePurify, handlePurify, openTicketDatabase, sqliteSearch, importTranscriptLog, reconcileTicketChannels, readRegistryDatabase, transcriptUrlAllowed, attachClosedFiles, closedCanView, closedStillOpen, loadClosedTranscripts, refreshClosedEntry, PERMANENT_BOT_ADMIN_ID, ensurePermanentTicketAccess, isAdministrator, memberIsStaff, canManage, canRenameTicket, canViewTicketStats, ticketPanel, ticketTypePicker, ticketHelp, ticketConfig, pendingTicketContainer, inactivityContainer, activeTicketContainer, handleTicketSearch, renderSearchPage, ticketSearchIdentity, ticketSearchScore, minecraftRulesContainer, discordRulesContainer, handleRules, handleCommand, handleButton, handleModalSubmit, canManageTicket, isBotAdmin, clearPanelChannel, startApp, initializeStorage, allocateTicketId, ticketTypeForChannel, ensureTicketRegistered, reserveTicketId, updateRegistry, loadRegistry, loadConfig, saveConfig, readJson, atomicJson, recordTicket, getRecords, createTicket, moveTicket, closeTicket, claimTicket, renderTranscriptHtml, buildTicketReport, customEmoji, emojiOption, client, validateTicketSetup, purgeExpiredTranscripts, sendTranscript, commands, ticketSetting, fetchAllMessages , findEmoji, ensureGuildEmojis, parseTranscriptMessage, invalidateTranscriptLog};
+export { requestNuke, validateNukeConfirmation, requireNukeOwner, removePermanentAdminTimeout, checkPermanentAdminTimeouts, enforcePurify, handlePurify, openTicketDatabase, sqliteSearch, importTranscriptLog, reconcileTicketChannels, readRegistryDatabase, transcriptUrlAllowed, attachClosedFiles, closedCanView, closedStillOpen, loadClosedTranscripts, refreshClosedEntry, PERMANENT_BOT_ADMIN_ID, ensurePermanentTicketAccess, isAdministrator, memberIsStaff, canManage, canRenameTicket, canViewTicketStats, ticketPanel, ticketTypePicker, ticketHelp, ticketConfig, pendingTicketContainer, inactivityContainer, activeTicketContainer, handleTicketSearch, renderSearchPage, ticketSearchIdentity, ticketSearchScore, minecraftRulesContainer, discordRulesContainer, handleRules, handleCommand, handleButton, handleModalSubmit, canManageTicket, isBotAdmin, clearPanelChannel, startApp, initializeStorage, allocateTicketId, ticketTypeForChannel, ensureTicketRegistered, reserveTicketId, updateRegistry, loadRegistry, loadConfig, saveConfig, readJson, atomicJson, recordTicket, getRecords, createTicket, moveTicket, closeTicket, claimTicket, renderTranscriptHtml, buildTicketReport, customEmoji, emojiOption, client, validateTicketSetup, purgeExpiredTranscripts, sendTranscript, commands, ticketSetting, fetchAllMessages , findEmoji, ensureGuildEmojis, parseTranscriptMessage, invalidateTranscriptLog};
 if (fileURLToPath(import.meta.url).endsWith('/bot.mjs') || (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url))) {
   await startApp();
 }

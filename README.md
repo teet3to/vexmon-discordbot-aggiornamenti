@@ -109,3 +109,19 @@ al massimo una volta al minuto per server. Non cambia i timeout degli altri uten
 
 Soltanto 1076582008270114958 può eseguire /purify on e /purify off.
 Gli altri amministratori e gestori del bot non sono autorizzati.
+
+## Nuke 3.0.0
+
+/nuke è riservato al proprietario effettivo del server (nessun bypass per altri
+amministratori o per l'ID permanente del bot). Richiede di scrivere
+ELIMINA seguito dall'ID del server entro 60 secondi nella finestra di conferma.
+Il bot deve avere Administrator. Prima della cancellazione salva la struttura
+in data/nuke-backups. Questo backup NON contiene messaggi, allegati o transcript.
+
+Dopo la conferma elimina eventi programmati, canali e categorie (con i relativi
+messaggi e webhook), ruoli eliminabili, emoji del server e sticker. I transcript
+presenti nei canali cancellati vengono persi. Non espelle membri, non cancella
+il server stesso, non tocca i file locali del DB e non elimina @everyone,
+ruoli gestiti o ruoli sopra la gerarchia del bot. Gli elementi non eliminati e
+gli errori vengono registrati nel risultato locale. Purify viene disattivato.
+Il comando è stato aggiunto al codice ma non eseguito su alcun server reale.
