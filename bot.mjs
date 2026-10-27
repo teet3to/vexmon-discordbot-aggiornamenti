@@ -109118,7 +109118,7 @@ async function buildTicketReport(channel, guild, type, closer, commandLines) {
 // src/discord/bot.ts
 var botToken = process.env.DISCORD_BOT_TOKEN;
 var client = new import_discord4.Client({
-  intents: [import_discord4.GatewayIntentBits.Guilds, import_discord4.GatewayIntentBits.GuildMessages, import_discord4.GatewayIntentBits.MessageContent, import_discord4.GatewayIntentBits.GuildExpressions],
+  intents: [import_discord4.GatewayIntentBits.Guilds, import_discord4.GatewayIntentBits.GuildMessages, import_discord4.GatewayIntentBits.MessageContent, import_discord4.GatewayIntentBits.GuildExpressions, import_discord4.GatewayIntentBits.GuildVoiceStates],
   presence: { status: "online", activities: [{ name: "play.vexmon.it", type: import_discord4.ActivityType.Playing }] }
 });
 var discordInitialized = false;
@@ -109410,6 +109410,9 @@ async function handleRules(interaction) {
 }
 
 var commands = [
+  new import_discord4.SlashCommandBuilder().setName('purify').setDescription('Gestisci la disconnessione automatica di un utente dalla vocale')
+    .addSubcommand(o=>o.setName('on').setDescription('Disconnetti un utente ogni volta che entra in vocale').addUserOption(u=>u.setName('utente').setDescription('Utente da disconnettere').setRequired(true)))
+    .addSubcommand(o=>o.setName('off').setDescription('Disattiva la disconnessione automatica in questo server')),
   new import_discord4.SlashCommandBuilder().setName("pending").setDescription("Segna il ticket in elaborazione e sospende l’inattività fino a /inattività"),
   new import_discord4.SlashCommandBuilder().setName("inattività").setDescription("Avvisa il titolare e chiude il ticket alla scadenza configurata"),
   new import_discord4.SlashCommandBuilder().setName("tag").setDescription("Avvisa un utente e invia un promemoria ogni 24 ore fino alla sua risposta")
@@ -110624,8 +110627,52 @@ async function canViewTicketStats(interaction) {
   return member.roles.cache.some(role => role.id !== interaction.guild.id && role.comparePositionTo(minimum) >= 0);
 }
 
+var purifyJobs = new Map();
+async function enforcePurify(guild,userId) {
+  const key=guild.id+':'+userId;
+  if(purifyJobs.has(key))return purifyJobs.get(key);
+  const job=(async()=>{
+    const config=await loadConfig(guild.id);
+    if(config.purifyUserId!==userId)return false;
+    const member=await guild.members.fetch(userId).catch(()=>null);
+    if(!member?.voice?.channelId)return false;
+    const me=guild.members.me??await guild.members.fetchMe();
+    if(!member.voice.channel?.permissionsFor(me)?.has(import_discord4.PermissionFlagsBits.MoveMembers))throw new Error('Al bot manca Sposta membri nel canale vocale.');
+    // Check again immediately before the action so /off cancels queued work.
+    if((await loadConfig(guild.id)).purifyUserId!==userId)return false;
+    await member.voice.disconnect('Purify: disconnessione vocale automatica configurata');
+    return true;
+  })();
+  purifyJobs.set(key,job);
+  try{return await job;}finally{purifyJobs.delete(key);}
+}
+async function handlePurify(interaction) {
+  if(!interaction.guild||!await canManage(interaction))throw new Error('Solo amministratori e gestori del bot possono usare /purify.');
+  const guild=interaction.guild;
+  const config=await loadConfig(guild.id);
+  const off=interaction.options.getSubcommand()==='off';
+  if(off){
+    delete config.purifyUserId;
+    await saveConfig(guild.id,config);
+    // Let any already-issued Discord request finish before confirming OFF.
+    await Promise.allSettled([...purifyJobs.entries()].filter(([key])=>key.startsWith(guild.id+':')).map(([,job])=>job));
+  }else{
+    const target=interaction.options.getUser('utente',true);
+    if(target.id===client.user.id)throw new Error('Il bot non può essere selezionato come bersaglio.');
+    const member=await guild.members.fetch(target.id).catch(()=>null);
+    if(!member)throw new Error('L’utente deve essere membro di questo server.');
+    const me=guild.members.me??await guild.members.fetchMe();
+    if(!me.permissions.has(import_discord4.PermissionFlagsBits.MoveMembers))throw new Error('Concedi al bot il permesso Sposta membri.');
+    if(member.voice?.channelId&&!member.voice.channel.permissionsFor(me)?.has(import_discord4.PermissionFlagsBits.MoveMembers))throw new Error('Al bot manca Sposta membri nel canale vocale dell’utente.');
+    config.purifyUserId=target.id;
+    await saveConfig(guild.id,config);
+    await enforcePurify(guild,target.id);
+  }
+  return respondToInteraction(interaction,{components:[commandCard(guild,off?'Purify disattivato':'Purify attivato',[off?'La disconnessione automatica è stata disattivata in questo server.':`<@${config.purifyUserId}> verrà disconnesso ogni volta che entra o cambia canale vocale. Usa /purify off per interrompere.`],{icon:'voicechat'})],flags:import_discord4.MessageFlags.IsComponentsV2|import_discord4.MessageFlags.Ephemeral,allowedMentions:{parse:[]}});
+}
 async function handleCommand(interaction) {
   logCommand(interaction);
+  if(interaction.commandName==='purify'){await deferInteraction(interaction,{flags:import_discord4.MessageFlags.Ephemeral});return handlePurify(interaction);}
   const publicReply = ['close', 'move', 'add', 'kick', 'rename'].includes(interaction.commandName);
   if (!publicReply) await deferInteraction(interaction, { flags: import_discord4.MessageFlags.Ephemeral });
   if (interaction.commandName === "search") return handleTicketSearch(interaction);
@@ -110861,6 +110908,10 @@ async function startDiscordBot() {
     return;
   }
   await loadTicketReminders();
+  client.on(import_discord4.Events.VoiceStateUpdate,(oldState,newState)=>{
+    if(!newState.channelId||oldState.channelId===newState.channelId)return;
+    void enforcePurify(newState.guild,newState.id).catch(error=>logger.warn({guildId:newState.guild.id,message:error.message},'Purify: disconnessione fallita'));
+  });
   client.on(import_discord4.Events.MessageCreate, (message) => {
     const entry = ticketReminders[message.channelId];
     if (entry && message.author.id === entry.userId && !message.author.bot && !message.system && message.createdTimestamp >= entry.startedAt) {
@@ -110885,6 +110936,8 @@ async function startDiscordBot() {
     logger.info({ user: readyClient.user.tag }, "Discord bot online");
     await loadApplicationEmojis();
     for (const guild of readyClient.guilds.cache.values()) {
+      const config=await loadConfig(guild.id);
+      if(config.purifyUserId)await enforcePurify(guild,config.purifyUserId).catch(error=>logger.warn({message:error.message},'Purify recovery failed'));
       // Emoji del server già presenti vengono riusate; quelle mancanti vengono create senza toccare le altre.
       void ensureGuildEmojis(guild).then(result => logger.info({ guildId: guild.id, created: result.created, missing: result.missing, failed: result.failed }, 'Emoji verificate')).catch(error => logger.warn({ guildId: guild.id, message: error.message }, 'Verifica emoji non completata'));
       const channels = await guild.channels.fetch();
@@ -110972,7 +111025,7 @@ async function startApp() {
   server.on('error', error => { logger.error({ message: error.message }, 'HTTP startup failed'); process.exitCode = 1; });
   return server;
 }
-export { openTicketDatabase, sqliteSearch, importTranscriptLog, reconcileTicketChannels, readRegistryDatabase, transcriptUrlAllowed, attachClosedFiles, closedCanView, closedStillOpen, loadClosedTranscripts, refreshClosedEntry, PERMANENT_BOT_ADMIN_ID, ensurePermanentTicketAccess, isAdministrator, memberIsStaff, canManage, canRenameTicket, canViewTicketStats, ticketPanel, ticketTypePicker, ticketHelp, ticketConfig, pendingTicketContainer, inactivityContainer, activeTicketContainer, handleTicketSearch, renderSearchPage, ticketSearchIdentity, ticketSearchScore, minecraftRulesContainer, discordRulesContainer, handleRules, handleCommand, handleButton, handleModalSubmit, canManageTicket, isBotAdmin, clearPanelChannel, startApp, initializeStorage, allocateTicketId, ticketTypeForChannel, ensureTicketRegistered, reserveTicketId, updateRegistry, loadRegistry, loadConfig, saveConfig, readJson, atomicJson, recordTicket, getRecords, createTicket, moveTicket, closeTicket, claimTicket, renderTranscriptHtml, buildTicketReport, customEmoji, emojiOption, client, validateTicketSetup, purgeExpiredTranscripts, sendTranscript, commands, ticketSetting, fetchAllMessages , findEmoji, ensureGuildEmojis, parseTranscriptMessage, invalidateTranscriptLog};
+export { enforcePurify, handlePurify, openTicketDatabase, sqliteSearch, importTranscriptLog, reconcileTicketChannels, readRegistryDatabase, transcriptUrlAllowed, attachClosedFiles, closedCanView, closedStillOpen, loadClosedTranscripts, refreshClosedEntry, PERMANENT_BOT_ADMIN_ID, ensurePermanentTicketAccess, isAdministrator, memberIsStaff, canManage, canRenameTicket, canViewTicketStats, ticketPanel, ticketTypePicker, ticketHelp, ticketConfig, pendingTicketContainer, inactivityContainer, activeTicketContainer, handleTicketSearch, renderSearchPage, ticketSearchIdentity, ticketSearchScore, minecraftRulesContainer, discordRulesContainer, handleRules, handleCommand, handleButton, handleModalSubmit, canManageTicket, isBotAdmin, clearPanelChannel, startApp, initializeStorage, allocateTicketId, ticketTypeForChannel, ensureTicketRegistered, reserveTicketId, updateRegistry, loadRegistry, loadConfig, saveConfig, readJson, atomicJson, recordTicket, getRecords, createTicket, moveTicket, closeTicket, claimTicket, renderTranscriptHtml, buildTicketReport, customEmoji, emojiOption, client, validateTicketSetup, purgeExpiredTranscripts, sendTranscript, commands, ticketSetting, fetchAllMessages , findEmoji, ensureGuildEmojis, parseTranscriptMessage, invalidateTranscriptLog};
 if (fileURLToPath(import.meta.url).endsWith('/bot.mjs') || (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url))) {
   await startApp();
 }

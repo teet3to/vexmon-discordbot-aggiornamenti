@@ -85,3 +85,13 @@ messaggio originale resta consultabile anche se il bot non riesce ad allegare il
 Per i ticket chiusi /search mostra direttamente il link al messaggio originale
 nel canale log, senza tentare di scaricare o riallegare l’HTML e senza indicare
 che una trascrizione sia indisponibile per un errore di recupero del file.
+
+## Purify 2.1.0
+
+`/purify on utente:@Utente` attiva la disconnessione automatica dalla vocale.
+Il bersaglio viene disconnesso subito se presente e a ogni ingresso o cambio di
+canale. `/purify off` disattiva la funzione nel server. È disponibile soltanto
+ad amministratori Discord, gestori tramite ruolo e amministratore permanente.
+Richiede al bot Sposta membri nei canali interessati. Non espelle dal server.
+La scelta è salvata in SQLite e resta attiva dopo il riavvio fino a /purify off.
+Viene gestito un bersaglio per server; un nuovo /purify on sostituisce il precedente.

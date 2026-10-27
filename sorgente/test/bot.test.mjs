@@ -287,3 +287,24 @@ test('/search mostra il link log anche senza poter recuperare il singolo messagg
     assert(!text.includes('non più disponibile'));assert(!text.includes('Ricerca SQLite'));assert(!text.includes('Indicizzazione dei log non completata'));
   }finally{archive.messages.fetch=fetch;}
 });
+
+test('purify disconnette ripetutamente il bersaglio e si arresta con off',async()=>{
+  const target=members.get(openerId);let disconnected=0;
+  target.voice={channelId:'vocale',channel:{permissionsFor:()=>fullPermissions},disconnect:async()=>{disconnected++;target.voice.channelId=null;}};
+  const cfg=await bot.loadConfig(guildId);cfg.purifyUserId=openerId;await bot.saveConfig(guildId,cfg);
+  assert(await bot.enforcePurify(guild,openerId));target.voice.channelId='altra-vocale';assert(await bot.enforcePurify(guild,openerId));assert.equal(disconnected,2);
+  const i=searchInteraction('');i.user.id='1076582008270114958';i.options.getSubcommand=()=> 'off';await bot.handlePurify(i);
+  target.voice.channelId='vocale';assert.equal(await bot.enforcePurify(guild,openerId),false);assert.equal(disconnected,2);
+});
+test('purify nega accesso allo staff non gestore e non tocca altri utenti',async()=>{
+  const i=searchInteraction('');i.options.getSubcommand=()=> 'on';
+  await assert.rejects(bot.handlePurify(i),/Solo amministratori/);
+  assert.equal(await bot.enforcePurify(guild,secondStaffId),false);
+});
+
+test('/purify on salva il bersaglio in SQLite e lo disconnette subito se è in vocale',async()=>{
+  const i=searchInteraction('');i.user.id='1076582008270114958';i.options.getSubcommand=()=> 'on';i.options.getUser=()=>members.get(openerId).user;
+  members.get(openerId).voice.channelId='vocale';
+  await bot.handlePurify(i);assert.equal((await bot.loadConfig(guildId)).purifyUserId,openerId);assert.equal(members.get(openerId).voice.channelId,null);
+  i.options.getSubcommand=()=> 'off';await bot.handlePurify(i);
+});
