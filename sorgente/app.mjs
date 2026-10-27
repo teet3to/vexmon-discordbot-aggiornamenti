@@ -1860,19 +1860,6 @@ async function renderSearchPage(interaction, token, requestedPage = 0) {
 
   if (!results.length) sections.push(`${e('domanda')} Nessun ticket aperto o chiuso accessibile corrisponde alla ricerca. Prova un ID ticket, un nickname Minecraft, un nome Discord o seleziona un utente.`);
   const visible = results.slice(page * SEARCH_PAGE_SIZE, (page + 1) * SEARCH_PAGE_SIZE);
-  for(const item of visible)if(item.kind==='closed') {
-    try {
-      const fresh=await refreshClosedEntry(guild,item.entry,destination);
-      item.unavailable=!fresh;
-      if(fresh)item.entry=fresh;
-      else item.unavailableText='Il messaggio originale risulta eliminato.';
-    }catch(error){
-      item.unavailable=true;
-      const code=String(error.code??'');
-      item.unavailableText=['50001','50013'].includes(code)?'Al bot manca l’accesso al messaggio nel log.':code==='TRANSCRIPT_ATTACHMENT'?'Il messaggio log esiste, ma non contiene un allegato HTML.':'Non riesco a recuperare l’allegato: prova il messaggio originale nel log.';
-      logger.warn({messageId:item.entry.messageId,channelId:item.entry.channelId,code,message:error.message},'Recupero trascrizione fallito');
-    }
-  }
   // Risultati divisi in gruppi (aperti / chiusi), ognuno con il suo titolo; in ogni scheda prima chi è, poi i dettagli.
   let lastKind = null;
   let position = page * SEARCH_PAGE_SIZE;
@@ -1918,28 +1905,17 @@ async function renderSearchPage(interaction, token, requestedPage = 0) {
           `${e('info')} **Categoria** ${searchSafe(entry.categoryLabel || 'Non disponibile')}`,
           `${e('redx')} **Chiuso** <t:${closedUnix}:f>${entry.closedById ? ` da <@${entry.closedById}>` : ''}`,
           `${e('freccia')} [Apri la trascrizione nel canale log](https://discord.com/channels/${guild.id}/${entry.channelId ?? config.transcriptChannelId}/${entry.messageId})`,
-          item.unavailableText ? `${e('info')} ${item.unavailableText}` : ''
+          ''
         ].join('\n')
       ].filter(Boolean).join('\n\n'));
     }
   }
   const card = commandCard(guild, 'Ricerca ticket', sections, { icon: 'search', footer: session.logError ? 'VEXMON • Assistenza • Storico in aggiornamento' : 'VEXMON • Assistenza' });
-  const uploadLimit=interaction.attachmentSizeLimit??guild.maximumFileSize??8*1024*1024;
-  const {files,reasons}=await attachClosedFiles(card,visible.filter(item=>item.kind==='closed'&&!item.unavailable),uploadLimit);
-  for(const reason of reasons)card.addTextDisplayComponents(new import_discord2.TextDisplayBuilder().setContent(`${e('info')} ${reason}`));
   if (pages > 1) card.addActionRowComponents(new import_discord4.ActionRowBuilder().addComponents(
     withEmoji(new import_discord4.ButtonBuilder().setCustomId(`search:page:${token}:${page - 1}`).setLabel('Precedente').setStyle(import_discord4.ButtonStyle.Secondary), emojiOption(guild, 'freccia')).setDisabled(page === 0),
     withEmoji(new import_discord4.ButtonBuilder().setCustomId(`search:page:${token}:${page + 1}`).setLabel('Successiva').setStyle(import_discord4.ButtonStyle.Secondary), emojiOption(guild, 'search')).setDisabled(page === pages - 1)
   ));
-  const uploadCard=new import_discord4.ContainerBuilder(card.toJSON());
-  for(const file of files)uploadCard.addFileComponents(new import_discord4.FileBuilder().setURL(`attachment://${file.name}`));
-  const payload={components:[uploadCard],flags,allowedMentions:{parse:[]},files,attachments:[]};
-  try{return await respondToInteraction(interaction,payload);}
-  catch(error){
-    if(!files.length||![40005,50035].includes(Number(error.code))&&error.status!==413)throw error;
-    card.addTextDisplayComponents(new import_discord2.TextDisplayBuilder().setContent(`${e('info')} Discord non ha accettato gli allegati: apri le trascrizioni dai link al canale log.`));
-    return respondToInteraction(interaction,{...payload,components:[card],files:[]});
-  }
+  return respondToInteraction(interaction,{components:[card],flags,allowedMentions:{parse:[]},files:[],attachments:[]});
 }
 async function handleTicketSearch(interaction) {
   const guild = interaction.guild;

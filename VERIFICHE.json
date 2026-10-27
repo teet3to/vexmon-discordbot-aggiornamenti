@@ -1,5 +1,5 @@
 {
-  "version": "2.0.1",
+  "version": "2.0.2",
   "based_on": "bot (10).mjs",
   "tests": {
     "passed": 27,
@@ -24,11 +24,12 @@
     "grafica e regole del bot definitivo",
     "amministratore permanente"
   ],
-  "sha256_bot": "47396845e6c443760d8841a832eaa484b498a0b9f9a3b6c80fa5fe5066946407",
+  "sha256_bot": "d89e2d716368f10d7c4bc03fa759dc10a20cff7c71e670a6c8a84a180d5cdb6a",
   "transcript_fix": [
     "fresh API message fetch",
     "HTML attachment independent of log card labels",
     "distinct access errors and deleted messages",
     "canonical log link preserved"
-  ]
+  ],
+  "search_delivery": "direct Discord log message link, no download/upload"
 }

@@ -209,7 +209,7 @@ function searchInteraction(name,staff=staffId){
   const i=interactionFor(staff);i.commandName='search';i.channel=archive;i.member=members.get(staff);i.memberPermissions=noPermissions;
   i.options={data:[],getString:()=>name,getUser:()=>null};i.reply=i.editReply;return i;
 }
-test('/search usa SQLite e invia il transcript chiuso con un riferimento file valido',async()=>{
+test('/search restituisce il link diretto al messaggio log senza allegati',async()=>{
   const original=globalThis.fetch;globalThis.fetch=async url=>{
     for(const message of archive.messages.cache.values())for(const attachment of message.attachments?.values()??[])if(attachment.url===url)return new Response(attachment.testContent);
     throw Error('URL inatteso');
@@ -217,17 +217,18 @@ test('/search usa SQLite e invia il transcript chiuso con un riferimento file va
   try{
     const i=searchInteraction(closedId);await bot.handleCommand(i);
     const reply=i.replies.at(-1);const text=JSON.stringify(reply.components[0].toJSON());
-    assert(text.includes(closedId));assert(text.includes('Ticket chiusi trovati'));assert.equal(reply.files.length,1);
-    assert(text.includes('attachment://'+reply.files[0].name));
+    assert(text.includes(closedId));assert(text.includes('Ticket chiusi trovati'));assert.equal(reply.files.length,0);
+    assert(text.includes('https://discord.com/channels/'+guildId+'/'+archive.id+'/'));
+    assert(!text.includes('attachment://'));
   }finally{globalThis.fetch=original;}
 });
-test('rifiuto allegati di Discord produce risposta con soli link senza file references rotti',async()=>{
+test('/search non tenta upload degli allegati e non crea file references',async()=>{
   const original=globalThis.fetch;globalThis.fetch=async()=>new Response('test');
   const i=searchInteraction(closedId);const save=i.editReply;let failures=0;
   i.editReply=async function(payload){if(payload.files?.length){failures++;throw Object.assign(Error('too large'),{code:40005});}return save.call(this,payload);};
   try{
-    await bot.handleCommand(i);assert.equal(failures,1);const reply=i.replies.at(-1);assert.equal(reply.files.length,0);
-    const text=JSON.stringify(reply.components[0].toJSON());assert(!text.includes('attachment://'));assert(text.includes('Discord non ha accettato'));
+    await bot.handleCommand(i);assert.equal(failures,0);const reply=i.replies.at(-1);assert.equal(reply.files.length,0);
+    const text=JSON.stringify(reply.components[0].toJSON());assert(!text.includes('attachment://'));assert(text.includes('Apri la trascrizione nel canale log'));
   }finally{globalThis.fetch=original;}
 });
 test('SQL archivi conserva tag e ritrova anche record senza ID ticket',async()=>{
@@ -276,13 +277,13 @@ test('forza lettura fresca del messaggio e non dipende dalla cache delle attachm
   archive.messages.fetch=async function(options){forced=options.force===true&&options.message===msg.id;return fetch.call(this,options);};
   try{await bot.refreshClosedEntry(guild,{guildId,channelId:archive.id,messageId:msg.id},archive);assert(forced);}finally{archive.messages.fetch=fetch;}
 });
-test('errori di lettura mantengono il link log e non fingono che il transcript sia stato eliminato',async()=>{
+test('/search mostra il link log anche senza poter recuperare il singolo messaggio',async()=>{
   const fetch=archive.messages.fetch;
   archive.messages.fetch=async function(options){if(options.message)throw Object.assign(Error('Missing Access'),{code:50001});return fetch.call(this,options);};
   try{
     const i=searchInteraction(closedId);await bot.handleCommand(i);
     const text=JSON.stringify(i.replies.at(-1).components[0].toJSON());
-    assert(text.includes('Apri la trascrizione nel canale log'));assert(text.includes('Al bot manca'));
+    assert(text.includes('Apri la trascrizione nel canale log'));assert(!text.includes('Al bot manca')); 
     assert(!text.includes('non più disponibile'));assert(!text.includes('Ricerca SQLite'));assert(!text.includes('Indicizzazione dei log non completata'));
   }finally{archive.messages.fetch=fetch;}
 });
