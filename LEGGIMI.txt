@@ -1,4 +1,4 @@
-# Vexmon Ticket Bot 2.0.0 — SQLite
+# Vexmon Ticket Bot 2.0.1 — SQLite
 
 Aggiornamento basato sul file definitivo `bot (10).mjs` fornito dall'utente.
 
@@ -70,3 +70,12 @@ npm run build
 
 La build genera `sorgente/bot.mjs`; il file di distribuzione è quello alla radice.
 I test usano SQLite reale e Discord simulato, senza login su un server reale.
+
+## Correzione 2.0.1
+
+Rimossi il messaggio tecnico di indicizzazione e il riferimento a SQLite dal
+footer di ricerca. Lo stato di importazione compare soltanto in forma discreta
+nel footer. Il recupero degli allegati forza la lettura aggiornata del messaggio
+e accetta trascrizioni HTML anche quando la scheda originale è stata modificata.
+Gli errori di accesso sono distinti dai messaggi realmente eliminati; il link al
+messaggio originale resta consultabile anche se il bot non riesce ad allegare il file.

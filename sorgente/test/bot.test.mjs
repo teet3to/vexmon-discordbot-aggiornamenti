@@ -57,7 +57,7 @@ function fakeChannel(options = {}) {
     async delete() { this.deleted = true; channels.delete(this.id); },
     toString() { return `<#${this.id}>`; },
     messages: { async fetch(options) {
-      if (typeof options === 'string') { const message = messages.get(options); if (!message) throw Object.assign(new Error('Unknown Message'), { code: 10008 }); return message; }
+      if (typeof options === 'string' || options.message) { const message = messages.get(typeof options === 'string'?options:options.message); if (!message) throw Object.assign(new Error('Unknown Message'), { code: 10008 }); return message; }
       const rows = [...messages.values()].filter(m => m.content !== undefined && (!options.before || BigInt(m.id) < BigInt(options.before))).sort((a, b) => BigInt(a.id) > BigInt(b.id) ? -1 : 1).slice(0, options.limit);
       return new Collection(rows.map(m => [m.id, m]));
     }, cache: messages }
@@ -261,4 +261,28 @@ test('backfill lento restituisce risultati parziali e riprende dal messaggio esa
 test('amministratore permanente resta autorizzato indipendentemente dai ruoli',async()=>{
   const i=interactionFor('1076582008270114958');i.memberPermissions=noPermissions;
   assert(await bot.isBotAdmin(i));assert(await bot.canManageTicket(i,'minecraft'));assert(await bot.canViewTicketStats(i));
+});
+
+test('recupera HTML anche quando la scheda log è stata modificata e non è più riconoscibile',async()=>{
+  const card=new D.ContainerBuilder().addTextDisplayComponents(new D.TextDisplayBuilder().setContent('Archivio modificato dallo staff'));
+  const msg=await archive.send({components:[card],files:[{name:'trascrizione.html',attachment:Buffer.from('<html>archivio</html>')}]});
+  const row={guildId,channelId:archive.id,messageId:msg.id,ticketId:'NEW123',tag:'legacy_log'};
+  const result=await bot.refreshClosedEntry(guild,row,archive);
+  assert(result.attachmentUrl);assert.equal(result.ticketId,'NEW123');
+});
+test('forza lettura fresca del messaggio e non dipende dalla cache delle attachments',async()=>{
+  const msg=[...archive.messages.cache.values()].find(m=>m.attachments?.size);
+  const fetch=archive.messages.fetch;let forced=false;
+  archive.messages.fetch=async function(options){forced=options.force===true&&options.message===msg.id;return fetch.call(this,options);};
+  try{await bot.refreshClosedEntry(guild,{guildId,channelId:archive.id,messageId:msg.id},archive);assert(forced);}finally{archive.messages.fetch=fetch;}
+});
+test('errori di lettura mantengono il link log e non fingono che il transcript sia stato eliminato',async()=>{
+  const fetch=archive.messages.fetch;
+  archive.messages.fetch=async function(options){if(options.message)throw Object.assign(Error('Missing Access'),{code:50001});return fetch.call(this,options);};
+  try{
+    const i=searchInteraction(closedId);await bot.handleCommand(i);
+    const text=JSON.stringify(i.replies.at(-1).components[0].toJSON());
+    assert(text.includes('Apri la trascrizione nel canale log'));assert(text.includes('Al bot manca'));
+    assert(!text.includes('non più disponibile'));assert(!text.includes('Ricerca SQLite'));assert(!text.includes('Indicizzazione dei log non completata'));
+  }finally{archive.messages.fetch=fetch;}
 });

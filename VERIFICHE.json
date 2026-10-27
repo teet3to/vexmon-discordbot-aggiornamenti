@@ -1,8 +1,8 @@
 {
-  "version": "2.0.0",
+  "version": "2.0.1",
   "based_on": "bot (10).mjs",
   "tests": {
-    "passed": 24,
+    "passed": 27,
     "failed": 0,
     "sqlite": "reale",
     "discord": "simulato; nessun login reale"
@@ -24,5 +24,11 @@
     "grafica e regole del bot definitivo",
     "amministratore permanente"
   ],
-  "sha256_bot": "e786a2ce7804187ddf15c41cac6381362ca0acdc4709d22ccba7624c0384caa5"
+  "sha256_bot": "47396845e6c443760d8841a832eaa484b498a0b9f9a3b6c80fa5fe5066946407",
+  "transcript_fix": [
+    "fresh API message fetch",
+    "HTML attachment independent of log card labels",
+    "distinct access errors and deleted messages",
+    "canonical log link preserved"
+  ]
 }

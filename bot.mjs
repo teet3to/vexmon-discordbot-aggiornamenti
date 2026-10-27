@@ -109764,14 +109764,26 @@ function transcriptUrlAllowed(raw) {
   try{const url=new URL(raw);return url.protocol==='https:'&&['cdn.discordapp.com','cdn.discord.com','media.discordapp.net'].includes(url.hostname);}catch{return false;}
 }
 async function refreshClosedEntry(guild,entry,destination) {
-  if(!destination || destination.id!==entry.channelId)return null;
+  const channel=destination?.id===entry.channelId ? destination : await guild.channels.fetch(entry.channelId);
+  if(!channel?.messages)throw Object.assign(new Error('Canale log non disponibile'),{code:10003});
   try {
-    const message=await destination.messages.fetch(entry.messageId);
-    const fresh=parseTranscriptMessage(message,guild.client.user.id);
-    if(!fresh || !fresh.attachmentUrl)return null;
-    return {...entry,...Object.fromEntries(Object.entries(fresh).filter(([,value])=>value!==undefined&&value!==''))};
+    // Force a fresh API response: cached messages can contain expired signed URLs
+    // or partial attachment metadata from an earlier indexing pass.
+    const message=await channel.messages.fetch({message:String(entry.messageId),force:true});
+    if(message.author?.id!==guild.client.user.id)throw Object.assign(new Error('Autore trascrizione inatteso'),{code:'TRANSCRIPT_AUTHOR'});
+    const attachments=[...(message.attachments?.values()??[])];
+    const attachment=attachments.find(item=>/\.html?$/i.test(item.name??''))??attachments.find(item=>/text\/html/i.test(item.contentType??''));
+    // A log card may have been edited since import: the HTML attachment, not the
+    // exact wording of its labels, determines whether it can still be delivered.
+    const parsed=parseTranscriptMessage(message,guild.client.user.id)??{};
+    const fresh={...entry,...Object.fromEntries(Object.entries(parsed).filter(([,value])=>value!==undefined&&value!=='')),channelId:channel.id,messageId:message.id};
+    if(!attachment?.url)throw Object.assign(new Error('Il messaggio esiste ma non contiene un file HTML'),{code:'TRANSCRIPT_ATTACHMENT'});
+    Object.assign(fresh,{attachmentUrl:attachment.url,attachmentName:attachment.name??'transcript.html',attachmentSize:attachment.size,deletedAt:null});
+    persistTranscript(fresh);
+    const saved=registry.archives.find(item=>item.messageId===entry.messageId);if(saved)Object.assign(saved,fresh);
+    return fresh;
   }catch(error){
-    if(error.code===10008){const row={...entry,deletedAt:Date.now()};persistTranscript(row);const found=registry.archives.find(item=>item.messageId===entry.messageId);if(found)found.deletedAt=row.deletedAt;return null;}
+    if(Number(error.code)===10008){const row={...entry,deletedAt:Date.now()};persistTranscript(row);const found=registry.archives.find(item=>item.messageId===entry.messageId);if(found)found.deletedAt=row.deletedAt;return null;}
     throw error;
   }
 }
@@ -109820,12 +109832,21 @@ async function renderSearchPage(interaction, token, requestedPage = 0) {
   const sections = [
     `${e('search')} **Ricerca** ${searchSafe(session.label, 100)}\n\n${e('ticket')} **Ticket aperti trovati:** ${open.length}\n${e('spunta')} **Ticket chiusi trovati:** ${closed.length}\n${e('info')} **Pagina:** ${page + 1}/${pages}`
   ];
-  if (session.logError) sections.push(`${e('redx')} Indicizzazione dei log non completata: i risultati chiusi possono essere parziali. La prossima ricerca riprende dal punto salvato.`);
+
   if (!results.length) sections.push(`${e('domanda')} Nessun ticket aperto o chiuso accessibile corrisponde alla ricerca. Prova un ID ticket, un nickname Minecraft, un nome Discord o seleziona un utente.`);
   const visible = results.slice(page * SEARCH_PAGE_SIZE, (page + 1) * SEARCH_PAGE_SIZE);
   for(const item of visible)if(item.kind==='closed') {
-    const fresh=await refreshClosedEntry(guild,item.entry,destination).catch(()=>null);
-    item.unavailable=!fresh;if(fresh)item.entry=fresh;
+    try {
+      const fresh=await refreshClosedEntry(guild,item.entry,destination);
+      item.unavailable=!fresh;
+      if(fresh)item.entry=fresh;
+      else item.unavailableText='Il messaggio originale risulta eliminato.';
+    }catch(error){
+      item.unavailable=true;
+      const code=String(error.code??'');
+      item.unavailableText=['50001','50013'].includes(code)?'Al bot manca l’accesso al messaggio nel log.':code==='TRANSCRIPT_ATTACHMENT'?'Il messaggio log esiste, ma non contiene un allegato HTML.':'Non riesco a recuperare l’allegato: prova il messaggio originale nel log.';
+      logger.warn({messageId:item.entry.messageId,channelId:item.entry.channelId,code,message:error.message},'Recupero trascrizione fallito');
+    }
   }
   // Risultati divisi in gruppi (aperti / chiusi), ognuno con il suo titolo; in ogni scheda prima chi è, poi i dettagli.
   let lastKind = null;
@@ -109857,7 +109878,7 @@ async function renderSearchPage(interaction, token, requestedPage = 0) {
       ].join('\n\n'));
     } else {
       const entry = item.entry;
-      if(item.unavailable){sections.push(`${e('info')} Trascrizione ${entry.ticketId||'storica'} non più disponibile nel canale log.`);continue;}
+
       const member = entry.openerId ? guild.members.cache.get(entry.openerId) ?? null : null;
       const identity = closedIdentity(entry, member, closedUserNames(guild, entry.openerId));
       const closedUnix = Math.floor((entry.closedAt ?? Date.now()) / 1000);
@@ -109871,12 +109892,13 @@ async function renderSearchPage(interaction, token, requestedPage = 0) {
         [
           `${e('info')} **Categoria** ${searchSafe(entry.categoryLabel || 'Non disponibile')}`,
           `${e('redx')} **Chiuso** <t:${closedUnix}:f>${entry.closedById ? ` da <@${entry.closedById}>` : ''}`,
-          `${e('freccia')} [Apri la trascrizione nel canale log](https://discord.com/channels/${guild.id}/${entry.channelId ?? config.transcriptChannelId}/${entry.messageId})`
+          `${e('freccia')} [Apri la trascrizione nel canale log](https://discord.com/channels/${guild.id}/${entry.channelId ?? config.transcriptChannelId}/${entry.messageId})`,
+          item.unavailableText ? `${e('info')} ${item.unavailableText}` : ''
         ].join('\n')
       ].filter(Boolean).join('\n\n'));
     }
   }
-  const card = commandCard(guild, 'Ricerca ticket', sections, { icon: 'search', footer: 'VEXMON • Ricerca SQLite • Allegati disponibili sotto; in alternativa usa il messaggio log • Ricerca valida 15 minuti' });
+  const card = commandCard(guild, 'Ricerca ticket', sections, { icon: 'search', footer: session.logError ? 'VEXMON • Assistenza • Storico in aggiornamento' : 'VEXMON • Assistenza' });
   const uploadLimit=interaction.attachmentSizeLimit??guild.maximumFileSize??8*1024*1024;
   const {files,reasons}=await attachClosedFiles(card,visible.filter(item=>item.kind==='closed'&&!item.unavailable),uploadLimit);
   for(const reason of reasons)card.addTextDisplayComponents(new import_discord2.TextDisplayBuilder().setContent(`${e('info')} ${reason}`));
